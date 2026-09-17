@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jev-sentiment"
+version = "0.1.0"
+description = "News sentiment scoring for stocks: mainstream news APIs in, a pluggable scorer (Jev by default), one score out."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Huaiyuan Ma" }]
+keywords = ["finance", "news", "sentiment", "jev", "typesafe", "quant"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "httpx>=0.27",
+    "typer>=0.12",
+    "platformdirs>=4",
+]
+
+[project.optional-dependencies]
+jev = ["typesafe-sdk>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
+
+# `uv run` / `uv sync` install this group by default, so the Jev SDK and the test
+# tools survive syncing. pip users get the same via `pip install ".[jev,dev]"`.
+[dependency-groups]
+dev = ["typesafe-sdk>=0.6", "pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
+
+[project.scripts]
+jevsent = "jev_sentiment.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jev_sentiment"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
