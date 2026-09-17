@@ -232,6 +232,48 @@ or they fall back to pytest's temporary directory.
 
 The design notes are in [PLAN.md](PLAN.md).
 
+## Status: what has and has not been tested live
+
+This is a 0.1 release built and verified on one machine with the API plans its
+author happens to have. Every source has unit tests against fixture payloads that
+follow the provider's documented response shape, but only some have been run
+against the real endpoint.
+
+| Component | Unit tests | Live-tested | Notes |
+|---|---|---|---|
+| `finnhub` | yes | **yes** | free tier, 237 AAPL articles / 7 days |
+| `polygon` / `massive` | yes | **yes** | free tier via `api.massive.com`, pagination exercised |
+| `newsapi` | yes | **yes** | developer plan (24 h delay) |
+| `yahoo` RSS | yes | **yes** | keyless |
+| `jev` scorer | yes (fake client) | **yes** | 310 articles scored with a real `TYPESAFE_API_KEY` |
+| `alpha_vantage` | yes | **no** | no key available; quota-message handling untested live |
+| `marketaux` | yes | **no** | no key available; page-size behaviour on the free plan unverified |
+| `tiingo` | yes | **no** | live call returned 403 on the free plan, so the parser has never seen real data |
+| generic `rss` (Atom) | yes | **no** | Atom branch only covered by a fixture; RSS 2.0 covered via Yahoo |
+| `keyword` scorer | yes | n/a | offline |
+
+Untested does not mean broken, but field names and pagination details are exactly
+where providers drift from their docs. If you hold a key for one of the untested
+sources, running `jevsent fetch AAPL -s <source>` and reporting the outcome is the
+single most useful contribution right now.
+
+## Contributing
+
+Testers, bug reports and pull requests are all welcome.
+
+* **Testers.** Run `jevsent doctor`, then `jevsent fetch` and `jevsent score` against
+  any source you have a key for. Open an issue with the provider, plan tier, the
+  command, and the output (redact your key). A short "works for me" note is useful too.
+* **New sources.** Subclass `NewsSource`, implement `fetch`, register the class, add
+  a fixture test in `tests/test_sources.py` and a row to the sources table above.
+  See "Writing a source" for the shape.
+* **New scorers.** Anything matching the `ScoreFn` contract can be added to
+  `jev_sentiment/scoring/` and registered in `SCORERS`.
+* **Pull requests.** Keep them focused, run `uv run pytest` before pushing, and
+  update the README table when you change what is tested. Don't commit `.env`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the short version of the workflow.
+
 ## Caveats
 
 Jev launched in September 2026 and its accuracy on financial text has not been
