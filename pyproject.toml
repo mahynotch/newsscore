@@ -36,6 +36,10 @@ dev = ["typesafe-sdk>=0.6", "pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
 [project.scripts]
 jevsent = "jev_sentiment.cli:app"
 
+[tool.hatch.build.targets.sdist]
+# Lockfile and design notes are for contributors (in git), not for installers.
+exclude = ["uv.lock", "PLAN.md", ".env.example", ".gitattributes", ".gitignore"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/jev_sentiment"]
 
