@@ -1,12 +1,12 @@
-"""``jevsent`` command line.
+"""``newsscore`` command line.
 
-    jevsent source add finnhub --api-key KEY
-    jevsent source add yahoo
-    jevsent source list
-    jevsent score AAPL --days 7
-    jevsent score AAPL -s finnhub -s yahoo --json
+    newsscore source add finnhub --api-key KEY
+    newsscore source add yahoo
+    newsscore source list
+    newsscore score AAPL --days 7
+    newsscore score AAPL -s finnhub -s yahoo --json
 
-Saved sources live in a per-user JSON file (``jevsent config-path`` shows where).
+Saved sources live in a per-user JSON file (``newsscore config-path`` shows where).
 API keys may be placed in a ``.env`` file in the working directory; it is loaded
 on every invocation without overriding real environment variables.
 """
@@ -66,7 +66,7 @@ def _main(
 
 @source_app.command("add")
 def source_add(
-    type_: Annotated[str, typer.Argument(metavar="TYPE", help="Source type; see `jevsent source types`.")],
+    type_: Annotated[str, typer.Argument(metavar="TYPE", help="Source type; see `newsscore source types`.")],
     name: Annotated[Optional[str], typer.Option("--name", "-n", help="Name to save under (default: the type).")] = None,
     api_key: Annotated[Optional[str], typer.Option("--api-key", "-k", help="Provider API key.")] = None,
     option: Annotated[
@@ -97,7 +97,7 @@ def source_list() -> None:
     """Show saved sources."""
     specs = SourceStore().load()
     if not specs:
-        typer.echo("no saved sources. Try: jevsent source add yahoo")
+        typer.echo("no saved sources. Try: newsscore source add yahoo")
         return
     rows = [(s.name, s.type, _mask(s.api_key), json.dumps(s.options) if s.options else "") for s in specs.values()]
     _table(("NAME", "TYPE", "API KEY", "OPTIONS"), rows)
@@ -212,7 +212,7 @@ def doctor() -> None:
     typer.echo(f"saved sources {', '.join(SourceStore().load()) or 'none'}")
     missing = []
     if importlib.util.find_spec("typesafe_sdk") is None:
-        missing.append("typesafe-sdk not installed (pip install 'jev-sentiment[jev]' or uv sync)")
+        missing.append("typesafe-sdk not installed (pip install 'newsscore[jev]' or uv sync)")
     if not os.environ.get("TYPESAFE_API_KEY"):
         missing.append("TYPESAFE_API_KEY not set")
     typer.echo(f"jev scorer    {'ready' if not missing else 'unavailable: ' + '; '.join(missing)}")

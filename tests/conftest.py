@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from jev_sentiment.models import Article, make_id
+from newsscore.models import Article, make_id
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
 
 # Where test artefacts (config files, score caches, live smoke-test output) are kept.
-# Override with JEVSENT_TEST_DATA. Falls back to pytest's tmp_path if the drive is missing.
-TEST_DATA_DIR = Path(os.environ.get("JEVSENT_TEST_DATA", r"E:\test_data\jev_sentiment"))
+# Override with NEWSSCORE_TEST_DATA. Falls back to pytest's tmp_path if the drive is missing.
+TEST_DATA_DIR = Path(os.environ.get("NEWSSCORE_TEST_DATA", r"E:\test_data\jev_sentiment"))
 
 
 @pytest.fixture
@@ -32,9 +32,9 @@ def data_dir(request, tmp_path) -> Path:
 @pytest.fixture(autouse=True)
 def isolated_user_dirs(data_dir, monkeypatch):
     """Keep tests away from the real config and cache files."""
-    monkeypatch.setenv("JEVSENT_CONFIG", str(data_dir / "sources.json"))
-    monkeypatch.setenv("JEVSENT_CACHE", str(data_dir / "scores.sqlite"))
-    monkeypatch.setenv("JEVSENT_ENV", str(data_dir / "absent.env"))  # ignore the project's real .env
+    monkeypatch.setenv("NEWSSCORE_CONFIG", str(data_dir / "sources.json"))
+    monkeypatch.setenv("NEWSSCORE_CACHE", str(data_dir / "scores.sqlite"))
+    monkeypatch.setenv("NEWSSCORE_ENV", str(data_dir / "absent.env"))  # ignore the project's real .env
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
 
 

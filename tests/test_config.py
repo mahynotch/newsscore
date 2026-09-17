@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from jev_sentiment import NewsScorer, load_env
-from jev_sentiment.config import SourceSpec, SourceStore, parse_env
+from newsscore import NewsScorer, load_env
+from newsscore.config import SourceSpec, SourceStore, parse_env
 
 
 def test_parse_env_forms():
@@ -47,10 +47,10 @@ def test_from_config_uses_env_file_for_keys(data_dir, monkeypatch):
     monkeypatch.delenv("FINNHUB_API_KEY")
 
 
-def test_jevsent_env_override_is_first_candidate(data_dir, monkeypatch):
+def test_newsscore_env_override_is_first_candidate(data_dir, monkeypatch):
     env = data_dir / "custom.env"
     env.write_text("MARKETAUX_API_KEY=m\n", encoding="utf-8")
-    monkeypatch.setenv("JEVSENT_ENV", str(env))
+    monkeypatch.setenv("NEWSSCORE_ENV", str(env))
     monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
     assert load_env() == env
     assert os.environ["MARKETAUX_API_KEY"] == "m"

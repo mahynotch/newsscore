@@ -15,7 +15,7 @@ def make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     """
     return httpx.AsyncClient(
         timeout=httpx.Timeout(timeout),
-        headers={"User-Agent": f"jev-sentiment/{__version__}", "Accept": "application/json, */*"},
+        headers={"User-Agent": f"newsscore/{__version__}", "Accept": "application/json, */*"},
         follow_redirects=True,
         transport=httpx.AsyncHTTPTransport(retries=2),
     )

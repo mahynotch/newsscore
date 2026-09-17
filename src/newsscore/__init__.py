@@ -1,12 +1,12 @@
-"""jev_sentiment: news sentiment scoring for stocks with a pluggable scorer.
+"""newsscore: news sentiment scoring for stocks with a pluggable scorer.
 
-    from jev_sentiment import NewsScorer
+    from newsscore import NewsScorer
 
     scorer = NewsScorer()                 # Jev if TYPESAFE_API_KEY is set, else keyword scorer
     scorer.source_add("yahoo")            # keyless RSS, good for a first try
     print(scorer.score("AAPL").score)
 
-See ``jev_sentiment.scoring.protocol`` for how to plug in your own scoring function.
+See ``newsscore.scoring.protocol`` for how to plug in your own scoring function.
 """
 
 from ._version import __version__

@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from jev_sentiment import ArticleScore, KeywordScorer, ScoredArticle, aggregate, per_article
-from jev_sentiment.scoring.protocol import call_score_fn, normalise_scores, scorer_name
+from newsscore import ArticleScore, KeywordScorer, ScoredArticle, aggregate, per_article
+from newsscore.scoring.protocol import call_score_fn, normalise_scores, scorer_name
 
 from conftest import NOW, make_article
 

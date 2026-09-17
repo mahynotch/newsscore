@@ -2,7 +2,7 @@
 
 Inspired by the Loughran-McDonald finance word lists but far smaller. It exists so
 the library works with zero API keys (tests, smoke checks, offline fallback), not
-because it is a good trading signal. Use :class:`~jev_sentiment.scoring.jev.JevScorer`
+because it is a good trading signal. Use :class:`~newsscore.scoring.jev.JevScorer`
 or your own model for real work.
 
 Method
@@ -73,7 +73,7 @@ def _score_text(text: str) -> tuple[float, int]:
 
 
 class KeywordScorer:
-    """Lexicon-based :data:`~jev_sentiment.scoring.protocol.ScoreFn`. See module docs."""
+    """Lexicon-based :data:`~newsscore.scoring.protocol.ScoreFn`. See module docs."""
 
     name = "keyword-v1"
 

@@ -22,7 +22,7 @@ def make_id(*parts: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Article:
-    """One news item as returned by a :class:`~jev_sentiment.sources.NewsSource`.
+    """One news item as returned by a :class:`~newsscore.sources.NewsSource`.
 
     Attributes:
         id: Stable identifier, unique per source (used for caching and de-duplication).

@@ -1,7 +1,7 @@
 """The scoring-function contract.
 
 A *scoring function* is any callable the engine can hand a batch of articles to.
-You can pass your own to :class:`~jev_sentiment.NewsScorer` as ``score_fn``.
+You can pass your own to :class:`~newsscore.NewsScorer` as ``score_fn``.
 
 Contract
 --------
@@ -20,7 +20,7 @@ Output
     A sequence with **exactly one item per input article, in the same order**.
     Each item may be any of:
 
-    * an :class:`~jev_sentiment.ArticleScore`;
+    * an :class:`~newsscore.ArticleScore`;
     * a bare number in ``[-1, 1]`` (confidence and relevance default to ``1.0``);
     * a mapping with key ``"score"`` and optional ``"confidence"``,
       ``"relevance"`` and ``"labels"``.

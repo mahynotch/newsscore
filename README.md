@@ -1,9 +1,9 @@
-# jev-sentiment
+# newsscore
 
-News sentiment scoring for stocks. Mainstream financial news APIs go in, a pluggable
+News sentiment scoring for stocks, powered by TypeSafe **Jev** by default. Mainstream financial news APIs go in, a pluggable
 scoring function (TypeSafe's **Jev** by default) scores every article, and one
 aggregate number per symbol comes out. Use it from Python (sync or async) or from the
-`jevsent` command line.
+`newsscore` command line.
 
 ```
 sources ──► fetch (async, concurrent) ──► de-dupe ──► score_fn (batched, cached) ──► aggregate ──► ScoreResult
@@ -29,29 +29,29 @@ FINNHUB_API_KEY=...
 POLYGON_API_KEY=...
 ```
 
-`jevsent` and `NewsScorer.from_config()` load it automatically. Real environment
+`newsscore` and `NewsScorer.from_config()` load it automatically. Real environment
 variables always win, blank values are ignored, and the file is git-ignored. Lookup:
-`$JEVSENT_ENV` alone if set, otherwise `./.env`, then `.env` in the user config directory. In code you
+`$NEWSSCORE_ENV` alone if set, otherwise `./.env`, then `.env` in the user config directory. In code you
 can also call `load_env("path/to/.env")` yourself before constructing sources.
 
 ## Quick start: CLI
 
 ```bash
-# 1. save some sources (stored in a per-user JSON file, see `jevsent config-path`)
-jevsent source add yahoo                       # keyless RSS, works immediately
-jevsent source add finnhub --api-key YOUR_KEY
-jevsent source add polygon                     # key taken from $POLYGON_API_KEY
+# 1. save some sources (stored in a per-user JSON file, see `newsscore config-path`)
+newsscore source add yahoo                       # keyless RSS, works immediately
+newsscore source add finnhub --api-key YOUR_KEY
+newsscore source add polygon                     # key taken from $POLYGON_API_KEY
 
 # 2. score
-jevsent score AAPL                             # all saved sources, last 7 days
-jevsent score AAPL -s finnhub -s yahoo -d 3    # only these sources, last 3 days
-jevsent score AAPL --scorer keyword -a 10      # force the offline scorer, show 10 articles
-jevsent score AAPL --json | jq .score
+newsscore score AAPL                             # all saved sources, last 7 days
+newsscore score AAPL -s finnhub -s yahoo -d 3    # only these sources, last 3 days
+newsscore score AAPL --scorer keyword -a 10      # force the offline scorer, show 10 articles
+newsscore score AAPL --json | jq .score
 
 # 3. look around
-jevsent fetch AAPL                             # articles only, no scoring
-jevsent source list | types | remove NAME
-jevsent doctor
+newsscore fetch AAPL                             # articles only, no scoring
+newsscore source list | types | remove NAME
+newsscore doctor
 ```
 
 Sample output (real run, four free-tier sources, Jev scorer):
@@ -76,7 +76,7 @@ out. 310 articles took about 15 s to score the first time and under 2 s from cac
 ## Quick start: Python
 
 ```python
-from jev_sentiment import NewsScorer
+from newsscore import NewsScorer
 
 scorer = NewsScorer()                          # Jev if TYPESAFE_API_KEY is set, else keyword scorer
 scorer.source_add("finnhub", api_key="...")
@@ -94,7 +94,7 @@ Inside an async pipeline use the `a`-prefixed methods; everything network-bound 
 
 ```python
 import asyncio
-from jev_sentiment import NewsScorer
+from newsscore import NewsScorer
 
 async def main():
     scorer = NewsScorer.from_config()          # loads the sources saved by the CLI
@@ -114,7 +114,7 @@ connection pools with the rest of your pipeline. `result.to_dict()` gives plain 
 The scorer is just a callable. Pass it as `score_fn`:
 
 ```python
-from jev_sentiment import NewsScorer, Article, ArticleScore, per_article
+from newsscore import NewsScorer, Article, ArticleScore, per_article
 
 # batch form (preferred): one call per batch of up to `batch_size` articles
 async def my_scorer(articles: list[Article], query: str) -> list[ArticleScore]:
@@ -144,7 +144,7 @@ scorer = NewsScorer(score_fn=per_article(lambda a, q: 0.5 if "beat" in a.text.lo
 | **Errors** | An exception fails only that batch. The message lands in `ScoreResult.errors`; other batches proceed. |
 | **Caching** | Results are cached under `(scorer name, query, article id)`. Set `fn.name` or `NewsScorer(scorer_name=...)`; anonymous lambdas are not cached. |
 
-The full contract also lives in the docstring of `jev_sentiment/scoring/protocol.py`.
+The full contract also lives in the docstring of `newsscore/scoring/protocol.py`.
 
 ## Built-in scorers
 
@@ -153,7 +153,7 @@ The full contract also lives in the docstring of `jev_sentiment/scoring/protocol
 | `jev` (default when available) | `pip install ".[jev]"`, `TYPESAFE_API_KEY` | One Jev `system_one` call per article asking a 5-level sentiment `Score`, a relevance `Noul`, an event `Choice` (earnings, guidance, M&A, legal, product, analyst, management, macro, other) and a novelty `Noul`. Score is the probability-weighted level rescaled to `[-1, 1]`; confidence is Jev's calibrated confidence. |
 | `keyword` | nothing | Small Loughran-McDonald-style lexicon with negation handling. Offline fallback and test double, not a trading signal. |
 
-Select explicitly with `NewsScorer(score_fn="keyword")` or `jevsent score --scorer keyword`.
+Select explicitly with `NewsScorer(score_fn="keyword")` or `newsscore score --scorer keyword`.
 Tune Jev with `NewsScorer(score_fn=JevScorer(concurrency=16, model="jev-latest"))`.
 
 ## News sources
@@ -172,8 +172,8 @@ Tune Jev with `NewsScorer(score_fn=JevScorer(concurrency=16, model="jev-latest")
 Add a source by type and options:
 
 ```bash
-jevsent source add marketaux --api-key KEY -o max_pages=5
-jevsent source add rss --name sec -o url="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
+newsscore source add marketaux --api-key KEY -o max_pages=5
+newsscore source add rss --name sec -o url="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 ```
 
 or in code: `scorer.source_add("marketaux", api_key="KEY", max_pages=5)`.
@@ -181,7 +181,7 @@ or in code: `scorer.source_add("marketaux", api_key="KEY", max_pages=5)`.
 ### Writing a source
 
 ```python
-from jev_sentiment import NewsSource, register
+from newsscore import NewsSource, register
 
 @register
 class MySource(NewsSource):
@@ -209,25 +209,25 @@ with `NewsScorer(aggregate_fn=my_fn)` where `my_fn(scored, now) -> Aggregate`.
 
 ## Caching and configuration
 
-* **Scores** are cached in SQLite at `platformdirs.user_cache_dir("jev_sentiment")/scores.sqlite`
-  (override with `JEVSENT_CACHE`; disable with `cache=False` or `--no-cache`; wipe with
-  `jevsent cache-clear`). Re-running a query only pays for unseen articles, and
+* **Scores** are cached in SQLite at `platformdirs.user_cache_dir("newsscore")/scores.sqlite`
+  (override with `NEWSSCORE_CACHE`; disable with `cache=False` or `--no-cache`; wipe with
+  `newsscore cache-clear`). Re-running a query only pays for unseen articles, and
   back-tests can replay from the cache.
-* **Sources** saved by the CLI live in `platformdirs.user_config_dir("jev_sentiment")/sources.json`
-  (override with `JEVSENT_CONFIG`). API keys may be left out and supplied via env vars.
+* **Sources** saved by the CLI live in `platformdirs.user_config_dir("newsscore")/sources.json`
+  (override with `NEWSSCORE_CONFIG`). API keys may be left out and supplied via env vars.
 
 ## Development
 
 ```bash
 uv sync                  # creates .venv with the package, the Jev SDK and test tools
-uv run jevsent doctor
+uv run newsscore doctor
 uv run pytest
 ```
 
 Or with plain pip: `pip install -e ".[jev,dev]"` then `pytest`.
 
 Test artefacts (per-test config files and score caches) are written under
-`E:\test_data\jev_sentiment` when that drive exists; set `JEVSENT_TEST_DATA` to move them,
+`E:\test_data\jev_sentiment` when that drive exists; set `NEWSSCORE_TEST_DATA` to move them,
 or they fall back to pytest's temporary directory.
 
 The design notes are in [PLAN.md](PLAN.md).
@@ -254,21 +254,21 @@ against the real endpoint.
 
 Untested does not mean broken, but field names and pagination details are exactly
 where providers drift from their docs. If you hold a key for one of the untested
-sources, running `jevsent fetch AAPL -s <source>` and reporting the outcome is the
+sources, running `newsscore fetch AAPL -s <source>` and reporting the outcome is the
 single most useful contribution right now.
 
 ## Contributing
 
 Testers, bug reports and pull requests are all welcome.
 
-* **Testers.** Run `jevsent doctor`, then `jevsent fetch` and `jevsent score` against
+* **Testers.** Run `newsscore doctor`, then `newsscore fetch` and `newsscore score` against
   any source you have a key for. Open an issue with the provider, plan tier, the
   command, and the output (redact your key). A short "works for me" note is useful too.
 * **New sources.** Subclass `NewsSource`, implement `fetch`, register the class, add
   a fixture test in `tests/test_sources.py` and a row to the sources table above.
   See "Writing a source" for the shape.
 * **New scorers.** Anything matching the `ScoreFn` contract can be added to
-  `jev_sentiment/scoring/` and registered in `SCORERS`.
+  `newsscore/scoring/` and registered in `SCORERS`.
 * **Pull requests.** Keep them focused, run `uv run pytest` before pushing, and
   update the README table when you change what is tested. Don't commit `.env`.
 

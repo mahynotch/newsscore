@@ -1,7 +1,7 @@
 """SQLite cache of per-article scores.
 
 Scoring is the expensive step (Jev calls cost money, user models cost time), so
-every :class:`~jev_sentiment.ArticleScore` is stored under
+every :class:`~newsscore.ArticleScore` is stored under
 ``(scorer_name, query, article_id)``. Re-running a query only scores articles that
 have not been seen before, and back-tests can replay from the cache for free.
 
@@ -35,10 +35,10 @@ CREATE TABLE IF NOT EXISTS scores (
 
 
 def default_cache_path() -> Path:
-    override = os.environ.get("JEVSENT_CACHE")
+    override = os.environ.get("NEWSSCORE_CACHE")
     if override:
         return Path(override).expanduser()
-    return Path(user_cache_dir("jev_sentiment")) / "scores.sqlite"
+    return Path(user_cache_dir("newsscore")) / "scores.sqlite"
 
 
 class ScoreCache:

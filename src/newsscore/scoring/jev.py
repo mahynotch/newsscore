@@ -13,7 +13,7 @@ question                type       becomes
 ======================  =========  ==========================================================
 
 ``confidence`` is Jev's own calibrated confidence for the sentiment answer.
-Requires ``pip install jev-sentiment[jev]`` and ``TYPESAFE_API_KEY``.
+Requires ``pip install newsscore[jev]`` and ``TYPESAFE_API_KEY``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ CATEGORIES = {
 
 
 class JevScorer:
-    """A :data:`~jev_sentiment.scoring.protocol.ScoreFn` backed by Jev.
+    """A :data:`~newsscore.scoring.protocol.ScoreFn` backed by Jev.
 
     Args:
         api_key: Overrides ``TYPESAFE_API_KEY``.
@@ -80,7 +80,7 @@ class JevScorer:
             import typesafe_sdk
         except ImportError as exc:  # pragma: no cover - depends on environment
             raise ImportError(
-                "The Jev scorer needs the TypeSafe SDK: pip install 'jev-sentiment[jev]'"
+                "The Jev scorer needs the TypeSafe SDK: pip install 'newsscore[jev]'"
             ) from exc
         return typesafe_sdk
 

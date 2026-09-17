@@ -1,10 +1,10 @@
 """Per-user store of configured news sources.
 
 Location (first match wins):
-    1. ``$JEVSENT_CONFIG``
-    2. ``platformdirs.user_config_dir("jev_sentiment")/sources.json``
-       (``%APPDATA%\\jev_sentiment`` on Windows, ``~/.config/jev_sentiment`` on Linux,
-       ``~/Library/Application Support/jev_sentiment`` on macOS)
+    1. ``$NEWSSCORE_CONFIG``
+    2. ``platformdirs.user_config_dir("newsscore")/sources.json``
+       (``%APPDATA%\\newsscore`` on Windows, ``~/.config/newsscore`` on Linux,
+       ``~/Library/Application Support/newsscore`` on macOS)
 
 Shape::
 
@@ -20,7 +20,7 @@ Shape::
 API keys can also live in a ``.env`` file (``KEY=VALUE`` lines, ``#`` comments,
 optional quotes). :func:`load_env` is called by the CLI and by
 ``NewsScorer.from_config()``; it never overrides variables already set in the
-environment. Lookup: ``$JEVSENT_ENV`` alone if set, else ``./.env``, then ``<config dir>/.env``.
+environment. Lookup: ``$NEWSSCORE_ENV`` alone if set, else ``./.env``, then ``<config dir>/.env``.
 """
 
 from __future__ import annotations
@@ -35,11 +35,11 @@ from platformdirs import user_config_dir
 
 
 def env_candidates() -> list[Path]:
-    """Where :func:`load_env` looks. ``JEVSENT_ENV``, when set, is the only candidate."""
-    override = os.environ.get("JEVSENT_ENV")
+    """Where :func:`load_env` looks. ``NEWSSCORE_ENV``, when set, is the only candidate."""
+    override = os.environ.get("NEWSSCORE_ENV")
     if override:
         return [Path(override).expanduser()]
-    return [Path.cwd() / ".env", Path(user_config_dir("jev_sentiment")) / ".env"]
+    return [Path.cwd() / ".env", Path(user_config_dir("newsscore")) / ".env"]
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -83,10 +83,10 @@ def load_env(path: Path | str | None = None, *, override: bool = False) -> Path 
 
 
 def config_path() -> Path:
-    override = os.environ.get("JEVSENT_CONFIG")
+    override = os.environ.get("NEWSSCORE_CONFIG")
     if override:
         return Path(override).expanduser()
-    return Path(user_config_dir("jev_sentiment")) / "sources.json"
+    return Path(user_config_dir("newsscore")) / "sources.json"
 
 
 @dataclass(slots=True)

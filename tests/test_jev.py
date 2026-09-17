@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from jev_sentiment import JevScorer
+from newsscore import JevScorer
 
 from conftest import make_article
 

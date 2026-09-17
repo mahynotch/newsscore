@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "jev-sentiment"
+name = "newsscore"
 version = "0.1.0"
-description = "News sentiment scoring for stocks: mainstream news APIs in, a pluggable scorer (Jev by default), one score out."
+description = "News sentiment scoring for stocks. Mainstream news APIs in, a pluggable scorer (TypeSafe Jev by default), one score per symbol out."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -34,14 +34,14 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
 dev = ["typesafe-sdk>=0.6", "pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
 
 [project.scripts]
-jevsent = "jev_sentiment.cli:app"
+newsscore = "newsscore.cli:app"
 
 [tool.hatch.build.targets.sdist]
 # Lockfile and design notes are for contributors (in git), not for installers.
 exclude = ["uv.lock", "PLAN.md", ".env.example", ".gitattributes", ".gitignore"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jev_sentiment"]
+packages = ["src/newsscore"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

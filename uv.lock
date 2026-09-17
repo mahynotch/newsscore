@@ -163,54 +163,6 @@ wheels = [
 ]
 
 [[package]]
-name = "jev-sentiment"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "httpx" },
-    { name = "platformdirs" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "respx" },
-]
-jev = [
-    { name = "typesafe-sdk" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "respx" },
-    { name = "typesafe-sdk" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "platformdirs", specifier = ">=4" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
-    { name = "typer", specifier = ">=0.12" },
-    { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6" },
-]
-provides-extras = ["jev", "dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "respx", specifier = ">=0.21" },
-    { name = "typesafe-sdk", specifier = ">=0.6" },
-]
-
-[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -285,6 +237,54 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/42/b4/c0f54632103846b658a10930025f4de41c8724b5e4805a5f3b395586cb7e/msgspec-0.21.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:0d03867786e5d7ba25d666df4b11320c27170f4aeafcb8e3a8b0a50a4fb742ca", size = 231822, upload-time = "2026-04-12T21:44:46.343Z" },
     { url = "https://files.pythonhosted.org/packages/ea/1d/0d85cc79d0ccf5508e9c846cc66552a6a16bf92abd1dbd8362617f7b35cd/msgspec-0.21.1-cp314-cp314t-win_amd64.whl", hash = "sha256:740fbf1c9d59992ca3537d6fbe9ebbf9eaf726a65fbf31448e0ecbc710697a63", size = 206650, upload-time = "2026-04-12T21:44:47.601Z" },
     { url = "https://files.pythonhosted.org/packages/90/91/56c5d560f20e6c20e9e4f55bd0e458f7f162aa689ee350346c04c48eac0b/msgspec-0.21.1-cp314-cp314t-win_arm64.whl", hash = "sha256:0d2cc73df6058d811a126ac3a8ad63a4dfa210c82f9cf5a004802eaf4712de90", size = 183149, upload-time = "2026-04-12T21:44:48.833Z" },
+]
+
+[[package]]
+name = "newsscore"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+    { name = "platformdirs" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+]
+jev = [
+    { name = "typesafe-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+    { name = "typesafe-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "platformdirs", specifier = ">=4" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
+    { name = "typer", specifier = ">=0.12" },
+    { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6" },
+]
+provides-extras = ["jev", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "respx", specifier = ">=0.21" },
+    { name = "typesafe-sdk", specifier = ">=0.6" },
 ]
 
 [[package]]

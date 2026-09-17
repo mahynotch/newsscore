@@ -31,10 +31,10 @@ class SourceError(RuntimeError):
 
 
 class NewsSource(ABC):
-    """A provider of :class:`~jev_sentiment.Article` objects.
+    """A provider of :class:`~newsscore.Article` objects.
 
     Class attributes:
-        type_name: Registry key, used by the CLI (``jevsent source add <type>``).
+        type_name: Registry key, used by the CLI (``newsscore source add <type>``).
         env_key: Environment variable consulted when no ``api_key`` is passed.
         requires_key: Set ``False`` for keyless providers such as RSS.
         query_kind: ``"symbol"`` if the provider expects a ticker, ``"keyword"``

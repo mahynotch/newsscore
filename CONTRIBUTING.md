@@ -1,14 +1,14 @@
 # Contributing
 
-Thanks for looking at jev-sentiment. Here is the short version.
+Thanks for looking at newsscore. Here is the short version.
 
 ## Setup
 
 ```bash
-git clone <this repo> && cd jev_sentiment
+git clone <this repo> && cd newsscore
 uv sync                     # venv with the package, the Jev SDK and test tools
 cp .env.example .env        # fill in whatever keys you have; blanks are ignored
-uv run jevsent doctor
+uv run newsscore doctor
 uv run pytest
 ```
 
@@ -19,9 +19,9 @@ for Alpha Vantage, Marketaux, Tiingo (news-enabled plan) or a non-Yahoo RSS/Atom
 feed, please run:
 
 ```bash
-uv run jevsent source add <type>
-uv run jevsent -v fetch AAPL -s <type> -d 7
-uv run jevsent score AAPL -s <type> --scorer keyword -a 5
+uv run newsscore source add <type>
+uv run newsscore -v fetch AAPL -s <type> -d 7
+uv run newsscore score AAPL -s <type> --scorer keyword -a 5
 ```
 
 and open an issue with the provider, your plan tier, and the output (redact the key).
@@ -47,4 +47,4 @@ that touches the network; sync wrappers stay thin.
 ## Reporting bugs
 
 Include the command or code, the full error, the provider and plan if a source is
-involved, and `uv run jevsent --version`.
+involved, and `uv run newsscore --version`.

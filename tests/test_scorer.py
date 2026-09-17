@@ -8,8 +8,8 @@ from datetime import datetime
 import httpx
 import pytest
 
-from jev_sentiment import Article, ArticleScore, NewsScorer, NewsSource, SourceError
-from jev_sentiment.config import SourceSpec, SourceStore
+from newsscore import Article, ArticleScore, NewsScorer, NewsSource, SourceError
+from newsscore.config import SourceSpec, SourceStore
 
 from conftest import make_article
 

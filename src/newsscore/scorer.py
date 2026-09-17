@@ -36,7 +36,7 @@ class NewsScorer:
         print(result.score, result.confidence, result.n_articles)
 
     Args:
-        score_fn: A scoring function (see ``jev_sentiment.scoring.protocol``), the
+        score_fn: A scoring function (see ``newsscore.scoring.protocol``), the
             name of a built-in one (``"jev"``, ``"keyword"``) or ``None`` for the default.
         scorer_name: Stable cache key for ``score_fn``; inferred when possible.
         cache: ``True`` for the default SQLite cache, ``False`` to disable, or a path.
@@ -114,9 +114,9 @@ class NewsScorer:
     def from_config(
         cls, path: Path | str | None = None, *, env_file: Path | str | None = None, **kwargs: Any
     ) -> "NewsScorer":
-        """Build a scorer pre-loaded with the sources saved by ``jevsent source add``.
+        """Build a scorer pre-loaded with the sources saved by ``newsscore source add``.
 
-        A ``.env`` file (``env_file``, else ``$JEVSENT_ENV``, ``./.env``, or the
+        A ``.env`` file (``env_file``, else ``$NEWSSCORE_ENV``, ``./.env``, or the
         config directory) is loaded first so API keys can live there. Sources
         that cannot be constructed (typically a missing key) are skipped with a
         warning rather than failing the whole load.
@@ -206,7 +206,7 @@ class NewsScorer:
     ) -> tuple[list[Article], list[str]]:
         selected = self._select(names)
         if not selected:
-            return [], ["no sources registered; add one with source_add() or `jevsent source add`"]
+            return [], ["no sources registered; add one with source_add() or `newsscore source add`"]
 
         async def one(source: NewsSource, client: httpx.AsyncClient) -> list[Article]:
             return await source.fetch(query, since, until, client)

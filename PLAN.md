@@ -1,4 +1,4 @@
-# jev_sentiment — implementation plan
+# newsscore — implementation plan
 
 A small, installable Python library and CLI that pulls company news from mainstream
 financial news APIs, scores each article with a pluggable scoring function (Jev by
@@ -8,8 +8,8 @@ default), and aggregates the result into a single sentiment score per symbol or 
 
 | Goal | How it shows up |
 |---|---|
-| Installable | `pip install .` gives the `jev_sentiment` package and the `jevsent` CLI. |
-| Two entry points | `NewsScorer` object for code, `jevsent` for the shell. Same engine underneath. |
+| Installable | `pip install .` gives the `newsscore` package and the `newsscore` CLI. |
+| Two entry points | `NewsScorer` object for code, `newsscore` for the shell. Same engine underneath. |
 | Mainstream sources | Finnhub, Alpha Vantage, Polygon, Tiingo, Marketaux, NewsAPI, plus generic RSS. |
 | Pluggable scoring | Any callable matching the `ScoreFn` contract. Jev scorer and a keyword fallback ship in the box. |
 | Async first | Every network call is `async`; sync wrappers are thin `asyncio.run` shims. |
@@ -19,11 +19,11 @@ default), and aggregates the result into a single sentiment score per symbol or 
 ## 2. Package layout
 
 ```
-jev_sentiment/
+newsscore/
 ├── pyproject.toml
 ├── README.md
 ├── PLAN.md
-├── src/jev_sentiment/
+├── src/newsscore/
 │   ├── __init__.py          # public API re-exports
 │   ├── models.py            # Article, ArticleScore, ScoredArticle, ScoreResult
 │   ├── scorer.py            # NewsScorer: source_add / source_remove / score / ascore
@@ -31,7 +31,7 @@ jev_sentiment/
 │   ├── cache.py             # SQLite cache of per-article scores
 │   ├── config.py            # per-user source store (JSON) + env-var API key fallback
 │   ├── http.py              # shared httpx client factory with retries
-│   ├── cli.py               # typer app: `jevsent source add|list|remove`, `jevsent score`, `jevsent fetch`
+│   ├── cli.py               # typer app: `newsscore source add|list|remove`, `newsscore score`, `newsscore fetch`
 │   ├── scoring/
 │   │   ├── __init__.py      # registry: name -> ScoreFn factory
 │   │   ├── protocol.py      # ScoreFn contract + normalisation helper
@@ -194,7 +194,7 @@ Deterministic, documented, and easy to swap: `NewsScorer(aggregate_fn=...)` is a
 
 ## 9. Local configuration (`config.py`)
 
-* Location: `platformdirs.user_config_dir("jev_sentiment")/sources.json`, override with `JEVSENT_CONFIG`.
+* Location: `platformdirs.user_config_dir("newsscore")/sources.json`, override with `NEWSSCORE_CONFIG`.
 * Shape: `{"sources": {"<name>": {"type": "finnhub", "api_key": "...", "options": {...}}}}`.
 * API keys are optional in the file; sources fall back to their `env_key`.
 * File written with mode 0600 where the OS supports it.
@@ -202,13 +202,13 @@ Deterministic, documented, and easy to swap: `NewsScorer(aggregate_fn=...)` is a
 ## 10. CLI (`cli.py`, typer)
 
 ```
-jevsent source add <type> [--name NAME] [--api-key KEY] [--option k=v]...
-jevsent source list
-jevsent source remove <name>
-jevsent source types                       # show supported source types + env var names
-jevsent fetch <query> [--source NAME]... [--days N] [--json]
-jevsent score <query> [--source NAME]... [--days N] [--scorer jev|keyword] [--json] [--show-articles]
-jevsent config-path
+newsscore source add <type> [--name NAME] [--api-key KEY] [--option k=v]...
+newsscore source list
+newsscore source remove <name>
+newsscore source types                       # show supported source types + env var names
+newsscore fetch <query> [--source NAME]... [--days N] [--json]
+newsscore score <query> [--source NAME]... [--days N] [--scorer jev|keyword] [--json] [--show-articles]
+newsscore config-path
 ```
 
 `--source` is repeatable; omitted means all saved sources. Output is a compact table by default,
@@ -237,4 +237,4 @@ JSON with `--json` so it pipes into other tools.
 4. `scorer.NewsScorer`.
 5. `scoring/jev`.
 6. `cli`.
-7. README, tests, install check (`pip install -e .` then `jevsent --help`).
+7. README, tests, install check (`pip install -e .` then `newsscore --help`).

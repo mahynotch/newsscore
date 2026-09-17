@@ -9,8 +9,8 @@ import httpx
 import pytest
 import respx
 
-from jev_sentiment.sources import SourceError, make_source
-from jev_sentiment.sources.base import parse_dt
+from newsscore.sources import SourceError, make_source
+from newsscore.sources.base import parse_dt
 
 from conftest import NOW
 
