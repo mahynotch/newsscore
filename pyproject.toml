@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Huaiyuan Ma" }]
+authors = [{ name = "Huaiyuan Ma", email = "huaiyuanma2003@gmail.com" }]
 keywords = ["finance", "news", "sentiment", "jev", "typesafe", "quant"]
 classifiers = [
     "Programming Language :: Python :: 3",
