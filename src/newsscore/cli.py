@@ -5,8 +5,14 @@
     newsscore source list
     newsscore score AAPL --days 7
     newsscore score AAPL -s finnhub -s yahoo --json
+    newsscore fetch AAPL --out news.json
 
-Saved sources live in a per-user JSON file (``newsscore config-path`` shows where).
+Nothing is written unless you ask for it: ``fetch`` and ``score`` print to stdout,
+and ``--out FILE`` saves the same payload as JSON instead. Article *scores* are
+cached in SQLite so a repeated query only pays for new articles, and saved sources
+live in a per-user JSON file. ``newsscore doctor`` prints every path in use; the
+``NEWSSCORE_CACHE``, ``NEWSSCORE_CONFIG`` and ``NEWSSCORE_ENV`` variables move them.
+
 API keys may be placed in a ``.env`` file in the working directory; it is loaded
 on every invocation without overriding real environment variables.
 """
@@ -18,12 +24,13 @@ import importlib.util
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
 
 from ._version import __version__
-from .cache import ScoreCache
+from .cache import ScoreCache, default_cache_path
 from .config import SourceSpec, SourceStore, config_path, env_candidates, load_env
 from .scorer import NewsScorer
 from .scoring import SCORERS
@@ -43,6 +50,10 @@ SourcesOpt = Annotated[
 ]
 DaysOpt = Annotated[float, typer.Option("--days", "-d", help="Look-back window in days.")]
 JsonOpt = Annotated[bool, typer.Option("--json", help="Machine-readable output.")]
+OutOpt = Annotated[
+    Optional[Path],
+    typer.Option("--out", metavar="FILE", help="Write the result to FILE as JSON instead of printing it."),
+]
 
 
 @app.callback()
@@ -132,12 +143,21 @@ def fetch(
     source: SourcesOpt = None,
     days: DaysOpt = 7,
     as_json: JsonOpt = False,
+    out: OutOpt = None,
 ) -> None:
-    """List recent articles without scoring them."""
+    """List recent articles without scoring them.
+
+    Articles are printed and then forgotten; pass --out FILE to keep them as JSON.
+    """
     scorer = NewsScorer.from_config(score_fn="keyword", cache=False)
     articles = _run(scorer, scorer.afetch(query, days=days, sources=source))
+    payload = [a.to_dict() for a in articles]
+    if out:
+        _write_json(out, payload)
+        typer.echo(f"wrote {len(articles)} article(s) to {out}")
+        return
     if as_json:
-        typer.echo(json.dumps([a.to_dict() for a in articles], indent=2))
+        typer.echo(json.dumps(payload, indent=2))
         return
     if not articles:
         typer.echo("no articles found")
@@ -159,15 +179,24 @@ def score(
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
     articles: Annotated[int, typer.Option("--articles", "-a", help="Show the N most recent scored articles.")] = 0,
     as_json: JsonOpt = False,
+    out: OutOpt = None,
 ) -> None:
-    """Fetch, score and aggregate news sentiment for QUERY."""
+    """Fetch, score and aggregate news sentiment for QUERY.
+
+    The result is printed; pass --out FILE to keep the full JSON (every scored
+    article included) instead.
+    """
     if scorer_name and scorer_name not in SCORERS:
         _fail(f"unknown scorer {scorer_name!r}. Known: {', '.join(sorted(SCORERS))}")
     scorer = NewsScorer.from_config(score_fn=scorer_name, cache=not no_cache, half_life_hours=half_life)
     result = _run(scorer, scorer.ascore(query, days=days, sources=source))
 
+    if out:
+        _write_json(out, result.to_dict())
+        typer.echo(f"wrote {result.n_articles} scored article(s) to {out}")
+        return
     if as_json:
-        typer.echo(json.dumps(result.to_dict(include_articles=articles > 0 or True), indent=2, default=str))
+        typer.echo(json.dumps(result.to_dict(), indent=2, default=str))
         return
 
     typer.echo(f"query       {result.query}")
@@ -209,6 +238,8 @@ def doctor() -> None:
     env_file = next((p for p in env_candidates() if p.is_file()), None)
     typer.echo(f"env file      {env_file or 'none found (looked in ' + ', '.join(str(p) for p in env_candidates()) + ')'}")
     typer.echo(f"config file   {config_path()}  ({'exists' if config_path().exists() else 'missing'})")
+    cache = default_cache_path()
+    typer.echo(f"score cache   {cache}  ({'exists' if cache.exists() else 'created on first score'})")
     typer.echo(f"saved sources {', '.join(SourceStore().load()) or 'none'}")
     missing = []
     if importlib.util.find_spec("typesafe_sdk") is None:
@@ -229,6 +260,17 @@ def _run(scorer: NewsScorer, coro):  # type: ignore[no-untyped-def]
             await scorer.aclose()
 
     return asyncio.run(go())
+
+
+def _write_json(path: Path, payload: object) -> None:
+    """Save `payload` as UTF-8 JSON, creating parent directories as needed."""
+    path = path.expanduser()
+    if path.parent != Path(""):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    except OSError as exc:
+        _fail(f"could not write {path}: {exc}")
 
 
 def _parse_options(items: list[str]) -> dict[str, object]:

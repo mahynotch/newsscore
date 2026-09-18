@@ -5,7 +5,7 @@ Thanks for looking at newsscore. Here is the short version.
 ## Setup
 
 ```bash
-git clone <this repo> && cd newsscore
+git clone https://github.com/mahynotch/newsscore.git && cd newsscore
 uv sync                     # venv with the package, the Jev SDK and test tools
 cp .env.example .env        # fill in whatever keys you have; blanks are ignored
 uv run newsscore doctor

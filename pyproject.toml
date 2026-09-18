@@ -24,7 +24,14 @@ dependencies = [
     "platformdirs>=4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/mahynotch/newsscore"
+Repository = "https://github.com/mahynotch/newsscore"
+Issues = "https://github.com/mahynotch/newsscore/issues"
+
 [project.optional-dependencies]
+# The Jev scorer is the only thing that imports typesafe-sdk; everything else
+# (sources, aggregation, the keyword scorer, your own score_fn) works without it.
 jev = ["typesafe-sdk>=0.6"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
 

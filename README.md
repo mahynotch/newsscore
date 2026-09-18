@@ -11,12 +11,37 @@ sources ──► fetch (async, concurrent) ──► de-dupe ──► score_fn
 
 ## Install
 
+Not on PyPI yet. Install straight from GitHub, or from a clone if you want to hack on it.
+
 ```bash
-pip install .            # library + CLI
-pip install ".[jev]"     # also the TypeSafe SDK for the Jev scorer
+# from GitHub
+pip install "newsscore[jev] @ git+https://github.com/mahynotch/newsscore.git"
+pip install "git+https://github.com/mahynotch/newsscore.git"        # without the Jev scorer
+pip install "newsscore[jev] @ git+https://github.com/mahynotch/newsscore.git@main"     # pin a branch, tag or commit
+
+# from a clone
+git clone https://github.com/mahynotch/newsscore.git && cd newsscore
+pip install -e ".[jev,dev]"     # editable, with the Jev SDK and the test tools
 ```
 
 Python 3.10+. Runtime dependencies: `httpx`, `typer`, `platformdirs`.
+
+### Do I need the `[jev]` extra?
+
+Only for the default scorer. `[jev]` adds one package, `typesafe-sdk`, and `JevScorer` is
+the only thing that imports it — sources, aggregation, caching, the CLI and your own
+`score_fn` all work without it.
+
+| you want | install | also needed |
+|---|---|---|
+| Jev scoring (the point of this package) | `[jev]` | `TYPESAFE_API_KEY` |
+| your own model as `score_fn` | plain | nothing |
+| a look at the plumbing, offline | plain | nothing — you get the `keyword` scorer |
+
+`NewsScorer()` uses Jev when the SDK is importable **and** `TYPESAFE_API_KEY` is set, and
+otherwise falls back to the `keyword` lexicon scorer with only a log line. That fallback is
+a test double, not a trading signal, so run `newsscore doctor` to see which one you have
+before trusting a number.
 
 ## API keys: the `.env` file
 
@@ -50,8 +75,10 @@ newsscore score AAPL --json | jq .score
 
 # 3. look around
 newsscore fetch AAPL                             # articles only, no scoring
+newsscore fetch AAPL --out news.json             # ...saved as JSON instead of printed
+newsscore score AAPL --out aapl.json             # full result, every scored article
 newsscore source list | types | remove NAME
-newsscore doctor
+newsscore doctor                                 # shows every path in use
 ```
 
 Sample output (real run, four free-tier sources, Jev scorer):
@@ -207,14 +234,42 @@ confidence = 1 - exp(-sum(weight_i) / 3)      # ~0.63 with three solid fresh art
 Change the half-life with `NewsScorer(half_life_hours=24)` or replace the whole thing
 with `NewsScorer(aggregate_fn=my_fn)` where `my_fn(scored, now) -> Aggregate`.
 
-## Caching and configuration
+## Where things are stored
 
-* **Scores** are cached in SQLite at `platformdirs.user_cache_dir("newsscore")/scores.sqlite`
-  (override with `NEWSSCORE_CACHE`; disable with `cache=False` or `--no-cache`; wipe with
-  `newsscore cache-clear`). Re-running a query only pays for unseen articles, and
-  back-tests can replay from the cache.
-* **Sources** saved by the CLI live in `platformdirs.user_config_dir("newsscore")/sources.json`
-  (override with `NEWSSCORE_CONFIG`). API keys may be left out and supplied via env vars.
+`newsscore` writes nothing you did not ask for. Run `newsscore doctor` to print the
+actual paths on your machine.
+
+| what | where | how to change it |
+|---|---|---|
+| **fetched articles** | nowhere — printed to the terminal | `--out FILE` to save them as JSON, or `--json` and redirect |
+| **scored results** | nowhere — printed to the terminal | `--out FILE`, or `--json` and redirect |
+| **article scores** (the cache) | `platformdirs.user_cache_dir("newsscore")/scores.sqlite` | `NEWSSCORE_CACHE`; `--no-cache` / `cache=False` to skip it; `newsscore cache-clear` to wipe it |
+| **saved sources** | `platformdirs.user_config_dir("newsscore")/sources.json` | `NEWSSCORE_CONFIG`; `newsscore config-path` to print it |
+| **API keys** | `.env` in the working directory | `NEWSSCORE_ENV`, or real environment variables |
+
+### Saving articles and results
+
+```bash
+newsscore fetch AAPL -d 7 --out aapl-articles.json     # every article, one JSON array
+newsscore score AAPL --out runs/aapl-2026-09-18.json   # aggregate + every scored article, dirs created
+```
+
+`--out` creates missing parent directories and always writes UTF-8, which the shell's
+own `>` redirection does not reliably do on Windows. In Python, `result.to_dict()` and
+`article.to_dict()` give the same structures, so you can send them wherever you like:
+
+```python
+import json
+result = scorer.score("AAPL", days=7)
+Path("aapl.json").write_text(json.dumps(result.to_dict(), indent=2, default=str), encoding="utf-8")
+```
+
+### The score cache
+
+Scores — not articles — are cached under `(scorer name, query, article id)`, so re-running
+a query only pays for articles you have not seen before, and back-tests replay for free.
+It is an ordinary SQLite file; point `NEWSSCORE_CACHE` at a project directory if you want
+one cache per research project rather than one per user.
 
 ## Development
 
