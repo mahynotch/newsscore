@@ -461,13 +461,16 @@ only 30% of articles get a weight other than `1.0`.
 | 40 articles | 0.021 | 0.068 | 8.5% |
 
 **But it is not validated against what actually happened.** On 597 articles across 20
-symbols with daily bars, measuring each article's move as a market-beta residual scaled
-by the symbol's own residual volatility:
+symbols, using split- and dividend-adjusted daily closes, and measuring each article's
+move as a residual against SPY scaled by the symbol's own residual volatility:
 
 | | low | medium | high | high - low | p |
 |---|---|---|---|---|---|
-| news day + next | 0.677 | 0.642 | 0.739 | +0.062 | 0.213 |
-| 5 days forward | 0.492 | 0.616 | 0.677 | +0.185 | 0.084 |
+| news day + next | 0.680 | 0.645 | 0.740 | +0.060 | 0.219 |
+| 5 days forward | 0.490 | 0.617 | 0.677 | +0.187 | 0.085 |
+
+Residualising matters here: on raw returns every one of these differences washes out,
+because three weeks of megacap moves are mostly market beta.
 
 The five-day ordering is monotone and in the right direction, which is what a weak but
 real signal looks like; it is not significant at conventional levels, and the one-day
