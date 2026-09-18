@@ -241,8 +241,72 @@ confidence = 1 - exp(-sum(weight_i) / 3)      # ~0.63 with three solid fresh art
 `impact_i` is `1.0` unless you switch on impact weighting, so by default this is
 exactly the confidence/relevance/decay scheme and nothing else.
 
-Change the half-life with `NewsScorer(half_life_hours=24)` or replace the whole thing
-with `NewsScorer(aggregate_fn=my_fn)` where `my_fn(scored, now) -> Aggregate`.
+Every term is configurable, and nothing about the defaults changed when these knobs
+were added:
+
+| control | default | what it does |
+|---|---|---|
+| `half_life_hours` | `48` | decay half-life; `0` disables decay |
+| `lookback_hours` | `None` | ignore articles older than this when aggregating |
+| `use_relevance` | `True` | set `False` to drop the relevance term |
+| `impact_weights` | `None` | see [Expected impact](#expected-impact) |
+| `aggregate_fn` | built-in | replace the scheme entirely |
+
+`lookback_hours` bounds what is *aggregated*; `days`/`since` bound what is *fetched*.
+They are separate on purpose: you can collect a week of news and still aggregate only
+the last 48 hours of it without re-fetching.
+
+The reference time is explicit everywhere — `until` for `score`, `as_of` for
+`score_articles` and `aggregate_scored` — so a run replays deterministically. Articles
+published after it are excluded rather than counted as the freshest evidence available.
+
+### Auditing an aggregate
+
+Every run reports, per article, each weight term and a normalised `contribution`.
+**The contributions sum to the reported score**, so any aggregate can be traced to the
+articles and the term that moved it:
+
+```
+ score    conf   rel  impact  decay   weight   contrib   headline
+ +0.99   0.99  0.97    1.0  0.973    0.934   +0.3157   Apple Stock Gets Stunning Price Target Hike
+ +0.47   0.94  0.95    1.0  0.969    0.866   +0.1367   Apple Stock Near Buy Point As iPhone 18 ...
+ +0.49   0.87  0.60    1.0  0.976    0.509   +0.0857   GM is re-downloading Apple CarPlay ...
+ +0.42   0.58  0.95    1.0  0.970    0.534   +0.0753   Apple will essentially sell 'every single'...
+ +0.29   0.65  0.16    1.0  0.967    0.101   +0.0101   Sector Update: Tech Stocks Rise Late ...
+                                                 sum =   +0.6235
+```
+
+```python
+result.total_weight          # 2.944
+result.reconciles()          # True
+[c.to_dict() for c in result.contributions]
+```
+
+`reconciles()` is also true, vacuously, for a custom `aggregate_fn`: contributions
+summing to the score is a property of a weighted mean, not of aggregation in general,
+so your own function is never asked to provide them and reports none.
+
+A zero `total_weight` is reported as `status="no_weight"`, which is deliberately not
+the same as a genuine `0.0` — see [When a run goes wrong](#when-a-run-goes-wrong).
+
+### Reproducing another aggregator
+
+Comparing schemes needs no model calls at all. `quant_aggregator()` is the scheme used
+by the existing `quant` pipeline — confidence x impact x decay, a 12-hour half-life, a
+48-hour lookback and no relevance term — so it can be reproduced exactly without this
+library changing its own general-purpose defaults:
+
+```python
+from newsscore import NewsScorer, quant_aggregator
+
+saved = json.loads(Path("aapl.json").read_text())
+theirs = NewsScorer(aggregate_fn=quant_aggregator()).aggregate_scored(
+    saved["articles"], saved["query"], as_of=saved["until"]
+)                                                  # +0.6034 against the default's +0.6235
+```
+
+From the command line, `--half-life`, `--lookback`, `--no-relevance` and
+`--impact-weighting` cover the same ground.
 
 ## Scoring news you already have
 

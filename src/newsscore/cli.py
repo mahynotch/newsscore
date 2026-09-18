@@ -77,6 +77,19 @@ FailOnOpt = Annotated[
 ]
 FAIL_ON_LEVELS = ("none", "unusable", "partial")
 
+RelevanceOpt = Annotated[
+    bool,
+    typer.Option("--no-relevance", help="Drop the relevance term from aggregation."),
+]
+LookbackOpt = Annotated[
+    Optional[float],
+    typer.Option(
+        "--lookback",
+        metavar="HOURS",
+        help="Ignore articles older than this when aggregating (separate from --days).",
+    ),
+]
+
 ImpactOpt = Annotated[
     bool,
     typer.Option(
@@ -222,6 +235,8 @@ def score(
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours for aggregation.")] = 48.0,
     impact_weighting: ImpactOpt = False,
+    no_relevance: RelevanceOpt = False,
+    lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
     articles: Annotated[int, typer.Option("--articles", "-a", help="Show the N most recent scored articles.")] = 0,
     as_json: JsonOpt = False,
@@ -243,6 +258,8 @@ def score(
             cache=not no_cache,
             half_life_hours=half_life,
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
+            use_relevance=not no_relevance,
+            lookback_hours=lookback,
         )
     except ScorerUnavailable as exc:  # asked for a scorer by name that cannot run here
         _fail(str(exc))
@@ -271,6 +288,8 @@ def score_articles(
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours.")] = 48.0,
     impact_weighting: ImpactOpt = False,
+    no_relevance: RelevanceOpt = False,
+    lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
     articles: Annotated[int, typer.Option("--articles", "-a", help="Show the N most recent scored articles.")] = 0,
     as_json: JsonOpt = False,
@@ -315,6 +334,8 @@ def score_articles(
             cache=not no_cache,
             half_life_hours=half_life,
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
+            use_relevance=not no_relevance,
+            lookback_hours=lookback,
         )
     except ScorerUnavailable as exc:
         _fail(str(exc))
@@ -397,7 +418,8 @@ def _emit(result, scorer, code: int, *, window: str = "", articles: int = 0, as_
         f"submitted={c.submitted} scored={c.scored} failed={c.failed}"
     )
     typer.echo(f"score       {result.score:+.3f}   (-1 bearish .. +1 bullish)")
-    typer.echo(f"confidence  {result.confidence:.3f}")
+    typer.echo(f"confidence  {result.confidence:.3f}   (evidence, not a probability)")
+    typer.echo(f"weight      {result.total_weight:.3f}")
     if result.by_source:
         typer.echo("by source   " + "  ".join(f"{k}={v:+.2f}" for k, v in sorted(result.by_source.items())))
     for message in result.errors:

@@ -10,7 +10,15 @@ See ``newsscore.scoring.protocol`` for how to plug in your own scoring function.
 """
 
 from ._version import __version__
-from .aggregate import IMPACT_WEIGHTS, Aggregate, AggregateFn, aggregate, make_aggregator
+from .aggregate import (
+    IMPACT_WEIGHTS,
+    Aggregate,
+    AggregateFn,
+    Contribution,
+    aggregate,
+    make_aggregator,
+    quant_aggregator,
+)
 from .cache import ScoreCache
 from .config import load_env
 from .models import IMPACT_LEVELS, Article, ArticleScore, RunCounts, RunStatus, ScoreFailure, ScoredArticle, ScoreResult
@@ -39,6 +47,8 @@ __all__ = [
     "SOURCE_TYPES",
     "register",
     "Aggregate",
+    "Contribution",
+    "quant_aggregator",
     "IMPACT_LEVELS",
     "IMPACT_WEIGHTS",
     "AggregateFn",

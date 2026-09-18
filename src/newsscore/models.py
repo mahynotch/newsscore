@@ -321,6 +321,12 @@ class ScoreResult:
         counts: Reconcilable tally of scoring tasks (see :class:`RunCounts`).
         failures: One :class:`ScoreFailure` per task that did not produce a score.
             Failed articles are never aggregated as neutral evidence.
+        total_weight: Sum of the aggregation weights. ``0.0`` means no usable
+            evidence, which ``status`` reports as ``"no_weight"``.
+        contributions: Per-article :class:`~newsscore.aggregate.Contribution` rows
+            whose ``contribution`` values sum to ``score``. Empty when a custom
+            ``aggregate_fn`` is in use, since that identity only holds for a
+            weighted mean.
     """
 
     query: str
@@ -336,6 +342,19 @@ class ScoreResult:
     counts: RunCounts = field(default_factory=RunCounts)
     failures: list[ScoreFailure] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
+    total_weight: float = 0.0
+    contributions: list[Any] = field(default_factory=list)
+
+    def reconciles(self, tolerance: float = 1e-9) -> bool:
+        """True when the per-article contributions sum to the reported score.
+
+        Holds whenever the built-in aggregator produced the result and any weight
+        survived. A custom ``aggregate_fn`` reports no contributions, and this is
+        then vacuously true.
+        """
+        if not self.contributions:
+            return True
+        return abs(sum(c.contribution for c in self.contributions) - self.score) <= tolerance
 
     @property
     def evidence_confidence(self) -> float:
@@ -368,6 +387,8 @@ class ScoreResult:
             "counts": self.counts.to_dict(),
             "failures": [f.to_dict() for f in self.failures],
             "usage": dict(self.usage),
+            "total_weight": self.total_weight,
+            "contributions": [c.to_dict() for c in self.contributions],
         }
         if include_articles:
             data["articles"] = [a.to_dict() for a in self.articles]

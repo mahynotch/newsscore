@@ -66,6 +66,9 @@ class NewsScorer:
         impact_weights: Switch on impact weighting with a mapping such as
             :data:`~newsscore.aggregate.IMPACT_WEIGHTS`. Off by default; articles
             without an ``expected_impact`` always weigh ``1.0``.
+        use_relevance: Set ``False`` to drop the relevance term from aggregation.
+        lookback_hours: Ignore articles older than this when aggregating. Separate
+            from the fetch window, which decides what is collected in the first place.
         aggregate_fn: Replace the default aggregation entirely.
         batch_size: Articles handed to ``score_fn`` per call.
         concurrency: Max concurrent ``score_fn`` calls.
@@ -85,6 +88,8 @@ class NewsScorer:
         cache: bool | str | Path = True,
         half_life_hours: float = 48.0,
         impact_weights: Mapping[str, float] | None = None,
+        use_relevance: bool = True,
+        lookback_hours: float | None = None,
         aggregate_fn: AggregateFn | None = None,
         batch_size: int = 16,
         concurrency: int = 4,
@@ -97,7 +102,12 @@ class NewsScorer:
             default_scorer() if score_fn is None else make_scorer(score_fn) if isinstance(score_fn, str) else score_fn
         )
         self.scorer_name = scorer_name or _infer_name(self.score_fn)
-        self.aggregate_fn = aggregate_fn or make_aggregator(half_life_hours, impact_weights=impact_weights)
+        self.aggregate_fn = aggregate_fn or make_aggregator(
+            half_life_hours,
+            impact_weights=impact_weights,
+            use_relevance=use_relevance,
+            lookback_hours=lookback_hours,
+        )
         self.batch_size = max(1, batch_size)
         self.concurrency = max(1, concurrency)
         self.retries = max(0, retries)
@@ -326,6 +336,8 @@ class NewsScorer:
         """Aggregate and package one run. Shared by every public entry point."""
         agg = self.aggregate_fn(scored, until)
         usage = _run_usage(scored)
+        contributions = list(getattr(agg, "contributions", []) or [])
+        total_weight = getattr(agg, "total_weight", None)
         counts = RunCounts(
             fetched=fetched,
             deduplicated=deduplicated,
@@ -344,10 +356,12 @@ class NewsScorer:
             by_source=agg.by_source,
             articles=scored,
             errors=errors,
-            status=_status(counts, scored),
+            status=_status(counts, scored, total_weight),
             counts=counts,
             failures=failures,
             usage=usage,
+            total_weight=0.0 if total_weight is None else total_weight,
+            contributions=contributions,
         )
 
     def fetch(self, query: str, **kwargs: Any) -> list[Article]:
@@ -606,13 +620,21 @@ def _run_usage(scored: Sequence[ScoredArticle]) -> dict[str, int]:
     return totals
 
 
-def _status(counts: RunCounts, scored: Sequence[ScoredArticle]) -> str:
-    """Which :class:`RunStatus` describes this run. See that class for the meanings."""
+def _status(
+    counts: RunCounts, scored: Sequence[ScoredArticle], total_weight: float | None = None
+) -> str:
+    """Which :class:`RunStatus` describes this run. See that class for the meanings.
+
+    ``total_weight`` comes from the aggregator when it reports one, so decay, lookback
+    and impact all count toward "is there any usable evidence". A custom aggregator
+    that reports nothing falls back to the per-article weights.
+    """
     if counts.submitted == 0:
         return RunStatus.NO_ARTICLES
     if counts.scored == 0:
         return RunStatus.ALL_FAILED
-    if not any(item.score.weight > 0 for item in scored):
+    usable = total_weight > 0 if total_weight is not None else any(i.score.weight > 0 for i in scored)
+    if not usable:
         return RunStatus.NO_WEIGHT  # scored fine, but 0.0 here means "no evidence"
     return RunStatus.PARTIAL if counts.failed else RunStatus.OK
 
