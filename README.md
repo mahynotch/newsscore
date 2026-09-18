@@ -11,15 +11,20 @@ sources ──► fetch (async, concurrent) ──► de-dupe ──► score_fn
 
 ## Install
 
-Not on PyPI yet. Install straight from GitHub, or from a clone if you want to hack on it.
+From PyPI:
 
 ```bash
-# from GitHub
-pip install "newsscore[jev] @ git+https://github.com/mahynotch/newsscore.git"
-pip install "git+https://github.com/mahynotch/newsscore.git"        # without the Jev scorer
-pip install "newsscore[jev] @ git+https://github.com/mahynotch/newsscore.git@main"     # pin a branch, tag or commit
+pip install "newsscore[jev]"     # with the Jev scorer (recommended)
+pip install newsscore            # without it; keyword scorer or your own score_fn
+```
 
-# from a clone
+Or with uv: `uv add "newsscore[jev]"`, or `uv tool install "newsscore[jev]"` for the CLI only.
+
+The latest unreleased code is on GitHub, and a clone is the way to hack on it:
+
+```bash
+pip install "newsscore[jev] @ git+https://github.com/mahynotch/newsscore.git"   # main branch
+
 git clone https://github.com/mahynotch/newsscore.git && cd newsscore
 pip install -e ".[jev,dev]"     # editable, with the Jev SDK and the test tools
 ```
