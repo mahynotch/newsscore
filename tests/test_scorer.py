@@ -68,7 +68,9 @@ def test_async_function_batching_dedupe_and_source_errors():
     assert result.n_articles == 4  # one syndicated duplicate dropped
     assert seen_batches == [2, 2]
     assert result.errors == ["broken: boom (HTTP 500)"]
-    assert result.articles[0].score.labels == {"q": "AAPL"}
+    labels = result.articles[0].score.labels
+    assert labels["q"] == "AAPL", "the scorer's own labels are preserved"
+    assert labels["local_cache_hit"] is False, "provenance is stamped even with caching off"
 
 
 def test_scorer_exception_is_recorded_not_raised():

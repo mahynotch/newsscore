@@ -30,7 +30,15 @@ from .models import (
     to_utc,
     utcnow,
 )
-from .scoring import ScoreFn, ScoreItemError, call_score_fn, default_scorer, make_scorer, scorer_name
+from .scoring import (
+    ScoreFn,
+    ScoreItemError,
+    call_score_fn,
+    default_scorer,
+    make_scorer,
+    scorer_fingerprint,
+    scorer_name,
+)
 from .scoring.protocol import error_slug, safe_str
 from .sources import NewsSource, SourceError, make_source
 
@@ -55,6 +63,9 @@ class NewsScorer:
         scorer_name: Stable cache key for ``score_fn``; inferred when possible.
         cache: ``True`` for the default SQLite cache, ``False`` to disable, or a path.
         half_life_hours: Decay half-life used by the default aggregator.
+        impact_weights: Switch on impact weighting with a mapping such as
+            :data:`~newsscore.aggregate.IMPACT_WEIGHTS`. Off by default; articles
+            without an ``expected_impact`` always weigh ``1.0``.
         aggregate_fn: Replace the default aggregation entirely.
         batch_size: Articles handed to ``score_fn`` per call.
         concurrency: Max concurrent ``score_fn`` calls.
@@ -73,6 +84,7 @@ class NewsScorer:
         scorer_name: str | None = None,
         cache: bool | str | Path = True,
         half_life_hours: float = 48.0,
+        impact_weights: Mapping[str, float] | None = None,
         aggregate_fn: AggregateFn | None = None,
         batch_size: int = 16,
         concurrency: int = 4,
@@ -85,7 +97,7 @@ class NewsScorer:
             default_scorer() if score_fn is None else make_scorer(score_fn) if isinstance(score_fn, str) else score_fn
         )
         self.scorer_name = scorer_name or _infer_name(self.score_fn)
-        self.aggregate_fn = aggregate_fn or make_aggregator(half_life_hours)
+        self.aggregate_fn = aggregate_fn or make_aggregator(half_life_hours, impact_weights=impact_weights)
         self.batch_size = max(1, batch_size)
         self.concurrency = max(1, concurrency)
         self.retries = max(0, retries)
@@ -94,9 +106,19 @@ class NewsScorer:
         self._http_client = http_client
         self._sources: dict[str, NewsSource] = {}
 
+        self.fingerprint = scorer_fingerprint(self.score_fn)
+
         self.cache: ScoreCache | None = None
         if cache and self.scorer_name is None:
             log.warning("score_fn has no stable name; caching disabled (set scorer_name= to enable)")
+        elif cache and self.fingerprint is None:
+            # The scorer cannot promise which model answers, so a stored score could
+            # not be attributed later. Computing without caching is the safe half.
+            log.warning(
+                "%s declines caching under its current settings (an unpinned model); "
+                "scores will be recomputed every run",
+                self.scorer_name,
+            )
         elif cache:
             self.cache = ScoreCache(None if cache is True else cache)
 
@@ -303,6 +325,7 @@ class NewsScorer:
     ) -> ScoreResult:
         """Aggregate and package one run. Shared by every public entry point."""
         agg = self.aggregate_fn(scored, until)
+        usage = _run_usage(scored)
         counts = RunCounts(
             fetched=fetched,
             deduplicated=deduplicated,
@@ -324,6 +347,7 @@ class NewsScorer:
             status=_status(counts, scored),
             counts=counts,
             failures=failures,
+            usage=usage,
         )
 
     def fetch(self, query: str, **kwargs: Any) -> list[Article]:
@@ -390,9 +414,11 @@ class NewsScorer:
         """Score what is not cached, keeping every success even when siblings fail."""
         if not articles:
             return [], [], []
+        by_id = {a.id: a for a in articles}
         scores: dict[str, ArticleScore] = {}
-        if self.cache is not None and self.scorer_name:
-            scores.update(self.cache.get_many(self.scorer_name, query, (a.id for a in articles)))
+        if self.cache is not None and self.scorer_name and self.fingerprint is not None:
+            cached = self.cache.get_many(self.scorer_name, self.fingerprint, query, articles)
+            scores.update({aid: _mark_cache_hit(score, True) for aid, score in cached.items()})
         pending = [a for a in articles if a.id not in scores]
         if not pending:
             return [ScoredArticle(a, scores[a.id]) for a in articles if a.id in scores], [], []
@@ -408,9 +434,9 @@ class NewsScorer:
             failures.update(bad)
 
         # Cache the successes even though siblings failed, so a rerun never pays twice.
-        if fresh and self.cache is not None and self.scorer_name:
-            self.cache.put_many(self.scorer_name, query, fresh)
-        scores.update(fresh)
+        if fresh and self.cache is not None and self.scorer_name and self.fingerprint is not None:
+            self.cache.put_many(self.scorer_name, self.fingerprint, query, by_id, fresh)
+        scores.update({aid: _mark_cache_hit(score, False) for aid, score in fresh.items()})
 
         errors = [f"scoring stopped: {state.fatal}"] if state.fatal is not None else []
         errors.extend(_summarise(failures.values()))
@@ -539,6 +565,45 @@ def _summarise(failures: Iterable[ScoreFailure]) -> list[str]:
         f"{count} article(s) failed to score [{error_type}]: {message}"
         for (error_type, message), count in tally.items()
     ]
+
+
+def _mark_cache_hit(score: ArticleScore, hit: bool) -> ArticleScore:
+    """Stamp where this score came from. Refers to newsscore's own local cache: a hit
+    means no request was made, not that a provider served a cached completion."""
+    labels = dict(score.labels)
+    labels["local_cache_hit"] = hit
+    return ArticleScore(
+        score=score.score,
+        confidence=score.confidence,
+        relevance=score.relevance,
+        labels=labels,
+        expected_impact=score.expected_impact,
+    )
+
+
+def _run_usage(scored: Sequence[ScoredArticle]) -> dict[str, int]:
+    """API usage spent by this run: freshly scored articles only.
+
+    Articles served from the local cache cost nothing now, whatever they cost when
+    they were first computed, so they must not be billed to this run.
+    """
+    totals: dict[str, int] = {}
+    requests = 0
+    for item in scored:
+        if item.score.labels.get("local_cache_hit"):
+            continue
+        usage = item.score.labels.get("usage") or {}
+        if not isinstance(usage, Mapping):
+            continue
+        requests += 1
+        for key, value in usage.items():
+            try:
+                totals[key] = totals.get(key, 0) + int(value)
+            except (TypeError, ValueError):
+                continue
+    if requests:
+        totals["requests"] = requests
+    return totals
 
 
 def _status(counts: RunCounts, scored: Sequence[ScoredArticle]) -> str:

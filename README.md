@@ -233,10 +233,13 @@ Registered types are available to the CLI too.
 ## How the aggregate is computed
 
 ```
-weight_i   = confidence_i * relevance_i * 0.5 ** (age_hours_i / half_life_hours)   # half_life 48h
+weight_i   = confidence_i * relevance_i * impact_i * 0.5 ** (age_hours_i / half_life_hours)   # half_life 48h
 score      = sum(weight_i * score_i) / sum(weight_i)
 confidence = 1 - exp(-sum(weight_i) / 3)      # ~0.63 with three solid fresh articles
 ```
+
+`impact_i` is `1.0` unless you switch on impact weighting, so by default this is
+exactly the confidence/relevance/decay scheme and nothing else.
 
 Change the half-life with `NewsScorer(half_life_hours=24)` or replace the whole thing
 with `NewsScorer(aggregate_fn=my_fn)` where `my_fn(scored, now) -> Aggregate`.
@@ -306,6 +309,100 @@ NewsScorer(half_life_hours=12).aggregate_scored(saved["articles"], saved["query"
 `aggregate_scored` is synchronous, never touches the network or the scorer, and returns
 a full `ScoreResult`. It is the cheap way to sweep a half-life over a saved run, or to
 re-score history after changing only the aggregation.
+
+## Expected impact
+
+Jev answers a second, separate question about every article: how *material* is this
+news for the target, over the next 1–5 trading days? That lands on `ArticleScore` as
+`expected_impact` — `"low"`, `"medium"`, `"high"`, or `None` from a scorer that does
+not judge impact — with the full distribution in `labels["impact_probs"]`.
+
+Impact is not sentiment. Sentiment is direction and strength; impact is how much the
+news should move your view at all. A lawsuit is strongly bearish **and** high impact; a
+routine supplier contract is mildly bullish and low impact. The rubric says this
+explicitly, because a model asked casually will otherwise just read impact off the
+strength of the sentiment.
+
+```python
+for item in result.articles:
+    s = item.score
+    print(f"{s.score:+.2f} {s.expected_impact or '-':>6}  {item.article.title}")
+```
+
+It costs nothing extra: all five questions ride in the same `system_one` call.
+
+### Weighting by impact
+
+Off by default. Pass a mapping to switch it on, in code or with `--impact-weighting`:
+
+```python
+from newsscore import NewsScorer, IMPACT_WEIGHTS       # {"high": 3.0, "medium": 1.5, "low": 1.0}
+
+scorer = NewsScorer(impact_weights=IMPACT_WEIGHTS)     # or your own mapping
+```
+
+Articles whose scorer supplies no impact weigh `1.0`, so enabling this changes only the
+articles that actually carry a judgement, and the `keyword` scorer or your own function
+keeps working untouched.
+
+Before you put a 3× weight on `high`, label a few hundred headlines yourself and check
+the labels agree with you. See the caveat at the end of this file.
+
+## What a cached score belongs to
+
+A score is reused only when it would be identical to recompute. The cache key covers
+the scorer, its **contract fingerprint**, the target, the article id *and* a digest of
+the article's text:
+
+| change | old scores reused? |
+|---|---|
+| same everything | **yes** — served locally, no request |
+| headline edited under the same url | no — content is part of the identity |
+| different target symbol | no — a separate scoring task |
+| rubric, horizon or question wording changed | no — the model was asked something else |
+| model version changed | no |
+
+The last three are what `fingerprint` buys you. A scorer publishes one as
+`fn.fingerprint`; set it to a digest of whatever changes your answers, or leave the
+attribute off to cache on the scorer name alone as before.
+
+### The model is pinned
+
+`JevScorer` requests a pinned version (`jev-1.13.0`) rather than `jev-latest`. This is
+deliberate: the API resolves an alias server-side and only tells you which version
+answered *after* the call, so an alias can never be part of a cache lookup — a silent
+model swap would keep serving the old model's scores forever. Ask for an alias anyway
+and the scorer refuses to cache rather than store answers it cannot attribute:
+
+```python
+JevScorer(model="jev-latest").fingerprint is None      # -> caching disabled, with a warning
+```
+
+Expect scores to move when the pinned default is raised; the cache invalidates wholesale
+at that point, which is the correct behaviour rather than a bug.
+
+### Provenance
+
+Every score carries where it came from, in `labels`: `requested_model` and the `model`
+that actually answered, `request_id`, `latency_ms`, `usage`, and `local_cache_hit`.
+
+`local_cache_hit` refers to **newsscore's own SQLite cache**, not any provider-side
+cache: a hit means no request was made at all. Run-level `result.usage` counts only
+what this run actually spent, so cached articles contribute nothing to it, while what
+they originally cost stays on the article for auditing.
+
+```python
+result.usage                  # {"input_tokens": 1663, "output_tokens": 279, "requests": 2}
+```
+
+### Two different confidences
+
+`ArticleScore.confidence` is the scorer's own calibrated confidence in one article's
+answer. `ScoreResult.confidence` — also available as the clearer
+`ScoreResult.evidence_confidence` — is an *aggregate evidence* measure that grows with
+how much weighted evidence there is. They are different quantities. Neither is a
+probability that a trade will be profitable, and one is not a substitute for the other
+in a review threshold.
 
 ## When a run goes wrong
 
@@ -454,6 +551,13 @@ Testers, bug reports and pull requests are all welcome.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the short version of the workflow.
 
 ## Caveats
+
+`expected_impact` is new and unvalidated. On a handful of hand-written headlines it
+behaves sensibly — effusive but immaterial CEO language comes back `low`, a revenue
+restatement comes back `high` — but on that sample impact and the magnitude of the
+sentiment score did not visibly come apart, so nothing here demonstrates that it
+carries information beyond "how strong is this news". Build a labelled set before you
+let `high` carry a 3× weight in anything that trades.
 
 Jev launched in September 2026 and its accuracy on financial text has not been
 independently benchmarked. Build a small hand-labelled set and compare `jev`

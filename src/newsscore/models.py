@@ -81,6 +81,21 @@ class Article:
         """Title plus summary: the text most scorers will want to read."""
         return f"{self.title}\n\n{self.summary}" if self.summary else self.title
 
+    @property
+    def content_digest(self) -> str:
+        """Fingerprint of the article state a scorer reads.
+
+        ``id`` identifies *where* an article came from, which is not the same thing:
+        a publisher can rewrite a headline under the same url. Cached scores are keyed
+        on this too, so edited content is rescored instead of served stale.
+        """
+        return make_id(
+            self.title,
+            self.summary or "",
+            ",".join(self.symbols),
+            self.published.isoformat(),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -127,6 +142,9 @@ class Article:
         )
 
 
+IMPACT_LEVELS = ("low", "medium", "high")
+
+
 @dataclass(frozen=True, slots=True)
 class ArticleScore:
     """The verdict of a scoring function on one article.
@@ -136,6 +154,12 @@ class ArticleScore:
         confidence: ``[0.0, 1.0]``, how sure the scorer is. Used as an aggregation weight.
         relevance: ``[0.0, 1.0]``, how much the article is actually about the query.
             Also used as an aggregation weight. Defaults to fully relevant.
+        expected_impact: ``"low"``, ``"medium"``, ``"high"`` or ``None`` when the
+            scorer does not judge impact. How *material* the news is for the target
+            over the scorer's horizon, which is a separate question from how bullish
+            or bearish it is: a major lawsuit is strongly negative *and* high impact,
+            a routine small contract is mildly positive and low impact. Only affects
+            aggregation when impact weighting is switched on.
         labels: Free-form extras (event category, probabilities, model name...).
     """
 
@@ -143,6 +167,7 @@ class ArticleScore:
     confidence: float = 1.0
     relevance: float = 1.0
     labels: Mapping[str, Any] = field(default_factory=dict, compare=False)
+    expected_impact: str | None = None
 
     def __post_init__(self) -> None:
         if not -1.0 <= self.score <= 1.0:
@@ -151,6 +176,10 @@ class ArticleScore:
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1], got {value!r}")
+        if self.expected_impact is not None and self.expected_impact not in IMPACT_LEVELS:
+            raise ValueError(
+                f"expected_impact must be one of {IMPACT_LEVELS} or None, got {self.expected_impact!r}"
+            )
 
     @property
     def weight(self) -> float:
@@ -162,6 +191,7 @@ class ArticleScore:
             "score": self.score,
             "confidence": self.confidence,
             "relevance": self.relevance,
+            "expected_impact": self.expected_impact,
             "labels": dict(self.labels),
         }
 
@@ -172,6 +202,7 @@ class ArticleScore:
             confidence=float(data.get("confidence", 1.0)),
             relevance=float(data.get("relevance", 1.0)),
             labels=dict(data.get("labels") or {}),
+            expected_impact=data.get("expected_impact") or None,
         )
 
 
@@ -282,6 +313,9 @@ class ScoreResult:
         by_source: Aggregate score per source name.
         articles: Every scored article, newest first.
         errors: Human-readable messages for sources or batches that failed.
+        usage: API usage consumed by *this* run only. Articles served from the local
+            cache cost nothing and are not counted here; what an earlier run spent to
+            compute them is kept per-article, under ``labels["usage"]``.
         status: One of :class:`RunStatus`. Check this before trusting ``score``:
             a 0.0 with ``status="no_weight"`` or ``"all_failed"`` is not neutral news.
         counts: Reconcilable tally of scoring tasks (see :class:`RunCounts`).
@@ -301,6 +335,19 @@ class ScoreResult:
     status: str = RunStatus.OK
     counts: RunCounts = field(default_factory=RunCounts)
     failures: list[ScoreFailure] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def evidence_confidence(self) -> float:
+        """Alias for :attr:`confidence`, named for what it actually measures.
+
+        This is *aggregate evidence* confidence: it grows with the amount of weighted
+        evidence, so ten fresh articles score higher than one. It is not a calibrated
+        probability of anything, and it is a different quantity from the per-article
+        ``ArticleScore.confidence`` the scorer reports. Do not substitute one for the
+        other in a review threshold. ``confidence`` stays as the compatible name.
+        """
+        return self.confidence
 
     @property
     def ok(self) -> bool:
@@ -320,6 +367,7 @@ class ScoreResult:
             "status": self.status,
             "counts": self.counts.to_dict(),
             "failures": [f.to_dict() for f in self.failures],
+            "usage": dict(self.usage),
         }
         if include_articles:
             data["articles"] = [a.to_dict() for a in self.articles]

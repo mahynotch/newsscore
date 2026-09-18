@@ -10,12 +10,13 @@ from newsscore import JevScorer
 from conftest import make_article
 
 
-def fake_response(probs, confidence=0.8, relevant=0.9, category="earnings", novel=0.4):
+def fake_response(probs, confidence=0.8, relevant=0.9, category="earnings", novel=0.4, impact="high"):
     return SimpleNamespace(
         model="jev-latest",
         answers={
             "sentiment": SimpleNamespace(score=max(probs, key=probs.get), confidence=confidence, probabilities=probs),
             "relevant": SimpleNamespace(noul=relevant),
+            "impact": SimpleNamespace(choice=impact, probabilities={impact: 0.8, "low": 0.2}),
             "category": SimpleNamespace(choice=category, confidence=0.7, probabilities={category: 0.7, "other": 0.3}),
             "novel": SimpleNamespace(noul=novel),
         },
@@ -29,6 +30,20 @@ def test_convert_maps_levels_to_unit_interval():
     assert very_positive.score == 1.0 and neutral.score == 0.0 and mixed.score == 0.0
     assert very_positive.confidence == 0.8 and very_positive.relevance == 0.9
     assert very_positive.labels["category"] == "earnings" and very_positive.labels["novel"] == 0.4
+    assert very_positive.expected_impact == "high"
+    assert very_positive.labels["impact_probs"] == {"high": 0.8, "low": 0.2}
+
+
+def test_convert_ignores_an_impact_level_it_does_not_know():
+    """Never invent a level: an unexpected label becomes None, not a guess."""
+    out = JevScorer._convert(fake_response({4: 1.0}, impact="catastrophic"))
+    assert out.expected_impact is None
+
+
+def test_convert_survives_a_response_without_the_impact_question():
+    stripped = fake_response({4: 1.0})
+    del stripped.answers["impact"]
+    assert JevScorer._convert(stripped).expected_impact is None
 
 
 def test_convert_falls_back_to_point_score_without_probabilities():
@@ -63,7 +78,7 @@ def test_call_path_uses_client_and_questions():
     arts = [make_article("Apple beats"), make_article("Apple misses")]
     out = asyncio.run(scorer(arts, "AAPL"))
     assert [s.score for s in out] == [1.0, -1.0]
-    assert client.calls[0][1] == {"sentiment", "relevant", "category", "novel"}
+    assert client.calls[0][1] == {"sentiment", "relevant", "impact", "category", "novel"}
     assert client.calls[0][0]["query"] == "AAPL"
     asyncio.run(scorer.aclose())
     assert client.closed

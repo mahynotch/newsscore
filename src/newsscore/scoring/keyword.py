@@ -15,6 +15,7 @@ sentiment word flips its sign.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from typing import Sequence
@@ -76,6 +77,12 @@ class KeywordScorer:
     """Lexicon-based :data:`~newsscore.scoring.protocol.ScoreFn`. See module docs."""
 
     name = "keyword-v1"
+
+    @property
+    def fingerprint(self) -> str:
+        """Digest of the lexicon, so editing a word list invalidates old scores."""
+        blob = "|".join(sorted(POSITIVE) + sorted(NEGATIVE) + sorted(NEGATORS))
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
     def __call__(self, articles: Sequence[Article], query: str) -> list[ArticleScore]:
         q = query.lower()

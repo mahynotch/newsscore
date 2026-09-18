@@ -18,6 +18,7 @@ from .protocol import (
     call_score_fn,
     normalise_scores,
     per_article,
+    scorer_fingerprint,
     scorer_name,
 )
 
@@ -64,5 +65,6 @@ __all__ = [
     "make_scorer",
     "normalise_scores",
     "per_article",
+    "scorer_fingerprint",
     "scorer_name",
 ]

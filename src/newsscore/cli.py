@@ -33,6 +33,7 @@ import typer
 from ._version import __version__
 from .cache import ScoreCache, default_cache_path
 from .config import SourceSpec, SourceStore, config_path, env_candidates, load_env
+from .aggregate import IMPACT_WEIGHTS
 from .models import RunStatus, parse_dt
 from .scorer import NewsScorer
 from .scoring import SCORERS, ScorerUnavailable
@@ -75,6 +76,18 @@ FailOnOpt = Annotated[
     ),
 ]
 FAIL_ON_LEVELS = ("none", "unusable", "partial")
+
+ImpactOpt = Annotated[
+    bool,
+    typer.Option(
+        "--impact-weighting",
+        help=(
+            "Weight articles by expected impact as well "
+            f"({', '.join(f'{k}={v:g}' for k, v in IMPACT_WEIGHTS.items())}). "
+            "Off by default. Articles whose scorer supplies no impact weigh 1.0."
+        ),
+    ),
+]
 
 
 def _exit_code(status: str, fail_on: str) -> int:
@@ -208,6 +221,7 @@ def score(
         Optional[str], typer.Option("--scorer", help=f"One of: {', '.join(sorted(SCORERS))}. Default: jev if configured, else keyword.")
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours for aggregation.")] = 48.0,
+    impact_weighting: ImpactOpt = False,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
     articles: Annotated[int, typer.Option("--articles", "-a", help="Show the N most recent scored articles.")] = 0,
     as_json: JsonOpt = False,
@@ -224,7 +238,12 @@ def score(
     if fail_on not in FAIL_ON_LEVELS:
         _fail(f"unknown --fail-on {fail_on!r}. Known: {', '.join(FAIL_ON_LEVELS)}")
     try:
-        scorer = NewsScorer.from_config(score_fn=scorer_name, cache=not no_cache, half_life_hours=half_life)
+        scorer = NewsScorer.from_config(
+            score_fn=scorer_name,
+            cache=not no_cache,
+            half_life_hours=half_life,
+            impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
+        )
     except ScorerUnavailable as exc:  # asked for a scorer by name that cannot run here
         _fail(str(exc))
     result = _run(scorer, scorer.ascore(query, days=days, sources=source))
@@ -251,6 +270,7 @@ def score_articles(
         Optional[str], typer.Option("--scorer", help=f"One of: {', '.join(sorted(SCORERS))}.")
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours.")] = 48.0,
+    impact_weighting: ImpactOpt = False,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
     articles: Annotated[int, typer.Option("--articles", "-a", help="Show the N most recent scored articles.")] = 0,
     as_json: JsonOpt = False,
@@ -290,7 +310,12 @@ def score_articles(
         _fail("no target: pass --query, or put a \"query\" key in the input")
 
     try:
-        scorer = NewsScorer.from_config(score_fn=scorer_name, cache=not no_cache, half_life_hours=half_life)
+        scorer = NewsScorer.from_config(
+            score_fn=scorer_name,
+            cache=not no_cache,
+            half_life_hours=half_life,
+            impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
+        )
     except ScorerUnavailable as exc:
         _fail(str(exc))
     try:
@@ -388,8 +413,9 @@ def _emit(result, scorer, code: int, *, window: str = "", articles: int = 0, as_
         typer.echo("")
         for item in result.articles[:articles]:
             a, sc = item.article, item.score
+            impact = f" i={sc.expected_impact[:3]}" if sc.expected_impact else ""
             typer.echo(
-                f"{sc.score:+.2f} c={sc.confidence:.2f} r={sc.relevance:.2f}  "
+                f"{sc.score:+.2f} c={sc.confidence:.2f} r={sc.relevance:.2f}{impact}  "
                 f"{a.published:%m-%d %H:%M} [{a.source}] {a.title}"
             )
     if code:

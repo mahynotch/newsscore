@@ -176,6 +176,25 @@ def per_article(fn: Callable[[Article, str], Union[ScoreItem, Awaitable[ScoreIte
     return batch
 
 
+def scorer_fingerprint(fn: Any) -> str | None:
+    """The scorer's contract fingerprint, deciding what a cached score belongs to.
+
+    A scorer sets ``fn.fingerprint`` to a short stable digest of everything that can
+    change its answers: model identity, instructions, rubrics, horizon, request
+    settings. Three cases:
+
+    * no ``fingerprint`` attribute -> ``""``, cached on name alone, as before;
+    * a string -> part of the cache identity, so changing the contract can never
+      reuse answers produced under the old one;
+    * ``None`` -> this scorer refuses caching, because it cannot promise which model
+      answered (see :class:`~newsscore.scoring.jev.JevScorer` and mutable aliases).
+    """
+    if not hasattr(fn, "fingerprint"):
+        return ""
+    value = fn.fingerprint
+    return value if value is None else str(value)
+
+
 def scorer_name(fn: Any) -> str | None:
     """Best stable name for caching, or ``None`` if the callable is anonymous."""
     name = getattr(fn, "name", None)

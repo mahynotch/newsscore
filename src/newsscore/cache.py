@@ -20,18 +20,29 @@ from typing import Iterable, Mapping
 
 from platformdirs import user_cache_dir
 
-from .models import ArticleScore
+from .models import Article, ArticleScore, make_id
 
+# v2 keys on a full identity rather than (scorer, query, article_id), so a changed
+# rubric, model or headline cannot serve an answer computed under the old contract.
+# Rows written by 0.1 live on in the old `scores` table and simply never match;
+# they were produced by a different scoring contract, so reusing them would be wrong.
+# `newsscore cache-clear` removes both.
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS scores (
+CREATE TABLE IF NOT EXISTS scores_v2 (
+    identity   TEXT PRIMARY KEY,
     scorer     TEXT NOT NULL,
     query      TEXT NOT NULL,
     article_id TEXT NOT NULL,
     payload    TEXT NOT NULL,
-    created    REAL NOT NULL,
-    PRIMARY KEY (scorer, query, article_id)
-)
+    created    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS scores_v2_scorer ON scores_v2 (scorer);
 """
+
+
+def identity(scorer: str, fingerprint: str, query: str, article: "Article") -> str:
+    """The cache key: who scored it, under what contract, for whom, and what they read."""
+    return make_id(scorer, fingerprint, query, article.id, article.content_digest)
 
 
 def default_cache_path() -> Path:
@@ -47,47 +58,70 @@ class ScoreCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(_SCHEMA)
+        self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
-    def get_many(self, scorer: str, query: str, ids: Iterable[str]) -> dict[str, ArticleScore]:
-        ids = list(ids)
-        if not ids:
+    def get_many(
+        self, scorer: str, fingerprint: str, query: str, articles: Iterable["Article"]
+    ) -> dict[str, ArticleScore]:
+        """Cached scores by article id, for articles whose identity still matches."""
+        wanted = {identity(scorer, fingerprint, query, a): a.id for a in articles}
+        if not wanted:
             return {}
+        keys = list(wanted)
         found: dict[str, ArticleScore] = {}
         # SQLite caps bound parameters; chunk to stay well under the limit.
-        for start in range(0, len(ids), 500):
-            chunk = ids[start : start + 500]
+        for start in range(0, len(keys), 500):
+            chunk = keys[start : start + 500]
             marks = ",".join("?" * len(chunk))
             rows = self._conn.execute(
-                f"SELECT article_id, payload FROM scores WHERE scorer=? AND query=? AND article_id IN ({marks})",
-                (scorer, query, *chunk),
+                f"SELECT identity, payload FROM scores_v2 WHERE identity IN ({marks})", chunk
             )
-            for article_id, payload in rows:
-                found[article_id] = ArticleScore.from_dict(json.loads(payload))
+            for key, payload in rows:
+                found[wanted[key]] = ArticleScore.from_dict(json.loads(payload))
         return found
 
-    def put_many(self, scorer: str, query: str, items: Mapping[str, ArticleScore]) -> None:
-        if not items:
+    def put_many(
+        self, scorer: str, fingerprint: str, query: str, items: Mapping[str, "Article"],
+        scores: Mapping[str, ArticleScore],
+    ) -> None:
+        if not scores:
             return
         now = time.time()
+        rows = [
+            (
+                identity(scorer, fingerprint, query, items[article_id]),
+                scorer,
+                query,
+                article_id,
+                json.dumps(score.to_dict(), default=str),
+                now,
+            )
+            for article_id, score in scores.items()
+            if article_id in items
+        ]
         self._conn.executemany(
-            "INSERT OR REPLACE INTO scores (scorer, query, article_id, payload, created) VALUES (?,?,?,?,?)",
-            [
-                (scorer, query, article_id, json.dumps(score.to_dict(), default=str), now)
-                for article_id, score in items.items()
-            ],
+            "INSERT OR REPLACE INTO scores_v2 (identity, scorer, query, article_id, payload, created)"
+            " VALUES (?,?,?,?,?,?)",
+            rows,
         )
         self._conn.commit()
 
     def clear(self, scorer: str | None = None) -> int:
-        cur = (
-            self._conn.execute("DELETE FROM scores WHERE scorer=?", (scorer,))
-            if scorer
-            else self._conn.execute("DELETE FROM scores")
-        )
+        removed = 0
+        for table in ("scores_v2", "scores"):
+            if not self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone():
+                continue
+            cur = (
+                self._conn.execute(f"DELETE FROM {table} WHERE scorer=?", (scorer,))
+                if scorer
+                else self._conn.execute(f"DELETE FROM {table}")
+            )
+            removed += max(0, cur.rowcount)
         self._conn.commit()
-        return cur.rowcount
+        return removed
 
     def close(self) -> None:
         self._conn.close()
