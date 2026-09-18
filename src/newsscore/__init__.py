@@ -13,9 +13,9 @@ from ._version import __version__
 from .aggregate import Aggregate, AggregateFn, aggregate, make_aggregator
 from .cache import ScoreCache
 from .config import load_env
-from .models import Article, ArticleScore, ScoredArticle, ScoreResult
+from .models import Article, ArticleScore, RunCounts, RunStatus, ScoreFailure, ScoredArticle, ScoreResult
 from .scorer import NewsScorer
-from .scoring import JevScorer, KeywordScorer, ScoreFn, per_article
+from .scoring import JevScorer, KeywordScorer, ScoreFn, ScoreItemError, ScorerUnavailable, per_article
 from .sources import SOURCE_TYPES, NewsSource, SourceError, register
 
 __all__ = [
@@ -25,7 +25,12 @@ __all__ = [
     "ArticleScore",
     "ScoredArticle",
     "ScoreResult",
+    "ScoreFailure",
+    "RunStatus",
+    "RunCounts",
     "ScoreFn",
+    "ScoreItemError",
+    "ScorerUnavailable",
     "per_article",
     "JevScorer",
     "KeywordScorer",

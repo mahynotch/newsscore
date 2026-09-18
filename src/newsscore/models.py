@@ -14,6 +14,38 @@ from typing import Any, Mapping
 UTC = timezone.utc
 
 
+def to_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def parse_dt(value: Any) -> datetime:
+    """Parse the timestamp formats seen across news APIs into aware UTC.
+
+    Handles unix seconds/milliseconds, ISO 8601 (with ``Z``), Alpha Vantage's
+    ``YYYYMMDDTHHMMSS`` and RFC 2822 (RSS ``pubDate``).
+    """
+    if isinstance(value, datetime):
+        return to_utc(value)
+    if isinstance(value, (int, float)):
+        seconds = value / 1000.0 if value > 1e11 else value
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    text = str(value).strip()
+    if text.isdigit():
+        return parse_dt(int(text))
+    if len(text) == 15 and text[8] == "T" and text[:8].isdigit():
+        return datetime.strptime(text, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
+    try:
+        return to_utc(datetime.fromisoformat(text.replace("Z", "+00:00")))
+    except ValueError:
+        pass
+    from email.utils import parsedate_to_datetime  # deferred: ~30 ms, RSS pubDate only
+
+    try:
+        return to_utc(parsedate_to_datetime(text))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unrecognised timestamp: {value!r}") from exc
+
+
 def make_id(*parts: str) -> str:
     """Deterministic short id from a handful of strings (source, url, title...)."""
     digest = hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()
@@ -59,6 +91,40 @@ class Article:
             "summary": self.summary,
             "symbols": list(self.symbols),
         }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "Article":
+        """Rebuild an article from JSON, for news collected by another application.
+
+        ``title`` and ``published`` are required; everything else is optional.
+        ``published`` accepts anything :func:`parse_dt` understands. The caller's
+        own ``id`` is preserved when given — it is what scores are cached against —
+        and derived from source plus url or title only when absent, matching what a
+        built-in source would have produced.
+        """
+        try:
+            title = str(data["title"])
+            published = parse_dt(data["published"])
+        except KeyError as exc:
+            raise ValueError(f"article is missing required field {exc.args[0]!r}") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"article {data.get('id') or title!r}: {exc}") from exc
+        source = str(data.get("source") or "external")
+        url = data.get("url") or None
+        article_id = data.get("id") or make_id(source, url or f"{title}|{published.isoformat()}")
+        symbols = data.get("symbols") or ()
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        return cls(
+            id=str(article_id),
+            source=source,
+            title=title.strip(),
+            published=published,
+            url=url,
+            summary=(data.get("summary") or "").strip() or None,
+            symbols=tuple(str(sym).upper() for sym in symbols if sym),
+            raw=dict(data.get("raw") or {}),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +183,91 @@ class ScoredArticle:
     def to_dict(self) -> dict[str, Any]:
         return {**self.article.to_dict(), **self.score.to_dict()}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ScoredArticle":
+        """Inverse of :meth:`to_dict`, so saved results can be re-aggregated offline."""
+        return cls(article=Article.from_dict(data), score=ArticleScore.from_dict(data))
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreFailure:
+    """One scoring task that did not produce a score.
+
+    A *task* is one ``(article, query)`` pair, so the same article scored for two
+    targets can fail independently.
+    """
+
+    article_id: str
+    source: str
+    error_type: str
+    message: str
+    attempts: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "article_id": self.article_id,
+            "source": self.source,
+            "error_type": self.error_type,
+            "message": self.message,
+            "attempts": self.attempts,
+        }
+
+
+class RunStatus:
+    """How a run ended. One value, chosen by the precedence listed in :data:`ORDER`.
+
+    ``OK`` covers a successful run whose aggregate happens to be 0.0 — a genuine
+    neutral reading. ``NO_WEIGHT`` is the different case where articles scored fine
+    but nothing carried usable weight (everything stale, irrelevant or zero
+    confidence), so 0.0 means "no evidence", not "neutral evidence". Never treat
+    the two as the same number.
+    """
+
+    NO_ARTICLES = "no_articles"  # nothing to score
+    ALL_FAILED = "all_failed"  # every scoring task failed
+    NO_WEIGHT = "no_weight"  # scored, but total aggregation weight is zero
+    PARTIAL = "partial"  # some tasks failed, some succeeded with weight
+    OK = "ok"  # every task succeeded
+
+    ORDER = (NO_ARTICLES, ALL_FAILED, NO_WEIGHT, PARTIAL, OK)
+    FAILED = (NO_ARTICLES, ALL_FAILED, NO_WEIGHT)
+
+
+@dataclass(frozen=True, slots=True)
+class RunCounts:
+    """Reconcilable tally for one run, in scoring tasks.
+
+    ``fetched == deduplicated + filtered + submitted`` and
+    ``submitted == scored + failed``, so every item handed in can be accounted for.
+
+    Attributes:
+        fetched: Items the run started from — returned by sources, or handed to
+            :meth:`~newsscore.NewsScorer.score_articles` by the caller.
+        deduplicated: Dropped as duplicates of another item.
+        filtered: Dropped for falling outside the window, including anything dated
+            after ``as_of``.
+        submitted: Actually handed to the scorer.
+        scored: Produced a score.
+        failed: Did not produce a score; see ``ScoreResult.failures``.
+    """
+
+    fetched: int = 0
+    deduplicated: int = 0
+    filtered: int = 0
+    submitted: int = 0
+    scored: int = 0
+    failed: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fetched": self.fetched,
+            "deduplicated": self.deduplicated,
+            "filtered": self.filtered,
+            "submitted": self.submitted,
+            "scored": self.scored,
+            "failed": self.failed,
+        }
+
 
 @dataclass(slots=True)
 class ScoreResult:
@@ -131,6 +282,11 @@ class ScoreResult:
         by_source: Aggregate score per source name.
         articles: Every scored article, newest first.
         errors: Human-readable messages for sources or batches that failed.
+        status: One of :class:`RunStatus`. Check this before trusting ``score``:
+            a 0.0 with ``status="no_weight"`` or ``"all_failed"`` is not neutral news.
+        counts: Reconcilable tally of scoring tasks (see :class:`RunCounts`).
+        failures: One :class:`ScoreFailure` per task that did not produce a score.
+            Failed articles are never aggregated as neutral evidence.
     """
 
     query: str
@@ -142,6 +298,14 @@ class ScoreResult:
     by_source: dict[str, float] = field(default_factory=dict)
     articles: list[ScoredArticle] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    status: str = RunStatus.OK
+    counts: RunCounts = field(default_factory=RunCounts)
+    failures: list[ScoreFailure] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """True when every scoring task succeeded and the aggregate rests on real weight."""
+        return self.status == RunStatus.OK
 
     def to_dict(self, *, include_articles: bool = True) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -153,6 +317,9 @@ class ScoreResult:
             "n_articles": self.n_articles,
             "by_source": dict(self.by_source),
             "errors": list(self.errors),
+            "status": self.status,
+            "counts": self.counts.to_dict(),
+            "failures": [f.to_dict() for f in self.failures],
         }
         if include_articles:
             data["articles"] = [a.to_dict() for a in self.articles]

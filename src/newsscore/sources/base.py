@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-from typing import Any, ClassVar, Iterable, Mapping
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Mapping
 
-import httpx
+if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for real
+    import httpx
 
-from ..models import UTC, Article, make_id
+from ..models import UTC, Article, make_id, parse_dt, to_utc  # noqa: F401  (re-exported)
 
 
 class SourceError(RuntimeError):
@@ -78,6 +78,8 @@ class NewsSource(ABC):
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Any:
+        import httpx
+
         try:
             response = await client.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
@@ -113,36 +115,6 @@ class NewsSource(ABC):
 
 
 # ---- date helpers ---------------------------------------------------------------
-
-
-def to_utc(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
-
-
-def parse_dt(value: Any) -> datetime:
-    """Parse the timestamp formats seen across news APIs into aware UTC.
-
-    Handles unix seconds/milliseconds, ISO 8601 (with ``Z``), Alpha Vantage's
-    ``YYYYMMDDTHHMMSS`` and RFC 2822 (RSS ``pubDate``).
-    """
-    if isinstance(value, datetime):
-        return to_utc(value)
-    if isinstance(value, (int, float)):
-        seconds = value / 1000.0 if value > 1e11 else value
-        return datetime.fromtimestamp(seconds, tz=timezone.utc)
-    text = str(value).strip()
-    if text.isdigit():
-        return parse_dt(int(text))
-    if len(text) == 15 and text[8] == "T" and text[:8].isdigit():
-        return datetime.strptime(text, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
-    try:
-        return to_utc(datetime.fromisoformat(text.replace("Z", "+00:00")))
-    except ValueError:
-        pass
-    try:
-        return to_utc(parsedate_to_datetime(text))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"unrecognised timestamp: {value!r}") from exc
 
 
 def in_window(published: datetime, since: datetime, until: datetime) -> bool:

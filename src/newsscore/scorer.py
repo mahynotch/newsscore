@@ -4,21 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
-import httpx
+if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for real
+    import httpx
 
 from .aggregate import AggregateFn, make_aggregator
 from .cache import ScoreCache
 from .config import SourceStore, load_env
 from .http import make_client
-from .models import Article, ArticleScore, ScoredArticle, ScoreResult, utcnow
-from .scoring import ScoreFn, call_score_fn, default_scorer, make_scorer, scorer_name
+from .models import (
+    Article,
+    ArticleScore,
+    RunCounts,
+    RunStatus,
+    ScoreFailure,
+    ScoredArticle,
+    ScoreResult,
+    parse_dt,
+    to_utc,
+    utcnow,
+)
+from .scoring import ScoreFn, ScoreItemError, call_score_fn, default_scorer, make_scorer, scorer_name
+from .scoring.protocol import error_slug, safe_str
 from .sources import NewsSource, SourceError, make_source
-from .sources.base import to_utc
 
 log = logging.getLogger(__name__)
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -44,6 +58,10 @@ class NewsScorer:
         aggregate_fn: Replace the default aggregation entirely.
         batch_size: Articles handed to ``score_fn`` per call.
         concurrency: Max concurrent ``score_fn`` calls.
+        retries: Extra attempts for *retryable* scoring failures (timeouts, rate
+            limits, 5xx). Successful articles are never rescored by a retry.
+        retry_backoff: Base seconds for exponential backoff between attempts,
+            with jitter. ``attempt n`` waits about ``retry_backoff * 2**(n-1)``.
         timeout: HTTP timeout in seconds for news providers.
         http_client: Reuse your own ``httpx.AsyncClient`` instead of a per-call one.
     """
@@ -58,6 +76,8 @@ class NewsScorer:
         aggregate_fn: AggregateFn | None = None,
         batch_size: int = 16,
         concurrency: int = 4,
+        retries: int = 2,
+        retry_backoff: float = 0.5,
         timeout: float = 20.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -68,6 +88,8 @@ class NewsScorer:
         self.aggregate_fn = aggregate_fn or make_aggregator(half_life_hours)
         self.batch_size = max(1, batch_size)
         self.concurrency = max(1, concurrency)
+        self.retries = max(0, retries)
+        self.retry_backoff = max(0.0, retry_backoff)
         self.timeout = timeout
         self._http_client = http_client
         self._sources: dict[str, NewsSource] = {}
@@ -143,7 +165,7 @@ class NewsScorer:
     ) -> list[Article]:
         """Fetch and de-duplicate articles across the selected sources, newest first."""
         since, until = _window(days, since, until)
-        articles, errors = await self._fetch(query, since, until, sources)
+        articles, errors, _ = await self._fetch(query, since, until, sources)
         for message in errors:
             log.warning(message)
         return articles
@@ -159,10 +181,136 @@ class NewsScorer:
     ) -> ScoreResult:
         """Fetch, score and aggregate. ``sources=None`` means every registered source."""
         since, until = _window(days, since, until)
-        articles, errors = await self._fetch(query, since, until, sources)
-        scored, score_errors = await self._score(articles, query)
+        articles, errors, fetched = await self._fetch(query, since, until, sources)
+        scored, score_errors, failures = await self._score(articles, query)
         errors.extend(score_errors)
+        return self._result(
+            query,
+            since,
+            until,
+            fetched=fetched,
+            deduplicated=fetched - len(articles),
+            filtered=0,  # sources already drop anything outside the window
+            scored=scored,
+            failures=failures,
+            errors=errors,
+        )
+
+    async def ascore_articles(
+        self,
+        articles: Iterable[Article | Mapping[str, Any]],
+        query: str,
+        *,
+        as_of: datetime | None = None,
+        since: datetime | None = None,
+        dedupe: bool = True,
+    ) -> ScoreResult:
+        """Score news you already have, without fetching anything.
+
+        For pipelines that collect their own articles and want only the scoring and
+        aggregation. Scores go through the same cache, scorer and aggregator as
+        :meth:`ascore`, so the two paths are comparable on identical input.
+
+        Args:
+            articles: :class:`~newsscore.Article` objects, or mappings shaped like
+                :meth:`Article.to_dict` (``title`` and ``published`` required). Ids,
+                titles, times, sources and urls are carried through untouched.
+            query: The target symbol or company. The same article scored for two
+                targets is two independent tasks, cached and reported separately.
+            as_of: Reference time for decay, and the upper bound for eligibility.
+                Defaults to now. Anything published after it is *filtered*, never
+                counted as fresh evidence.
+            since: Optional lower bound; by default every article is eligible.
+            dedupe: Drop syndicated copies, as the fetching path does.
+
+        Returns:
+            A :class:`~newsscore.ScoreResult` whose ``counts`` account for every item
+            handed in: ``fetched == deduplicated + filtered + submitted``.
+        """
+        until = to_utc(as_of) if as_of else utcnow()
+        lower = to_utc(since) if since else None
+        supplied = [a if isinstance(a, Article) else Article.from_dict(a) for a in articles]
+
+        eligible = [
+            a for a in supplied if a.published <= until and (lower is None or a.published >= lower)
+        ]
+        filtered = len(supplied) - len(eligible)
+        selected = _dedupe(eligible) if dedupe else sorted(eligible, key=lambda a: a.published, reverse=True)
+
+        scored, errors, failures = await self._score(selected, query)
+        window_start = lower or min((a.published for a in selected), default=until)
+        return self._result(
+            query,
+            window_start,
+            until,
+            fetched=len(supplied),
+            deduplicated=len(eligible) - len(selected),
+            filtered=filtered,
+            scored=scored,
+            failures=failures,
+            errors=errors,
+        )
+
+    def aggregate_scored(
+        self,
+        scored: Iterable[ScoredArticle | Mapping[str, Any]],
+        query: str,
+        *,
+        as_of: datetime | str | None = None,
+    ) -> ScoreResult:
+        """Re-aggregate articles that already carry scores. Never calls the scorer.
+
+        Use it to try different aggregation settings against a saved run: build a
+        scorer with the new ``half_life_hours`` (or a different ``aggregate_fn``) and
+        hand the scored articles back. No model calls, no network, no cost.
+
+            saved = json.loads(Path("aapl.json").read_text())
+            NewsScorer(half_life_hours=12, cache=False).aggregate_scored(
+                saved["articles"], saved["query"], as_of=saved["until"]
+            )
+        """
+        until = (
+            to_utc(as_of) if isinstance(as_of, datetime) else parse_dt(as_of) if as_of else utcnow()
+        )
+        supplied = [s if isinstance(s, ScoredArticle) else ScoredArticle.from_dict(s) for s in scored]
+        eligible = [s for s in supplied if s.article.published <= until]
+        items = sorted(eligible, key=lambda s: s.article.published, reverse=True)
+        window_start = min((s.article.published for s in items), default=until)
+        return self._result(
+            query,
+            window_start,
+            until,
+            fetched=len(supplied),
+            deduplicated=0,
+            filtered=len(supplied) - len(eligible),
+            scored=items,
+            failures=[],
+            errors=[],
+        )
+
+    def _result(
+        self,
+        query: str,
+        since: datetime,
+        until: datetime,
+        *,
+        fetched: int,
+        deduplicated: int,
+        filtered: int,
+        scored: list[ScoredArticle],
+        failures: list[ScoreFailure],
+        errors: list[str],
+    ) -> ScoreResult:
+        """Aggregate and package one run. Shared by every public entry point."""
         agg = self.aggregate_fn(scored, until)
+        counts = RunCounts(
+            fetched=fetched,
+            deduplicated=deduplicated,
+            filtered=filtered,
+            submitted=len(scored) + len(failures),
+            scored=len(scored),
+            failed=len(failures),
+        )
         return ScoreResult(
             query=query,
             since=since,
@@ -173,6 +321,9 @@ class NewsScorer:
             by_source=agg.by_source,
             articles=scored,
             errors=errors,
+            status=_status(counts, scored),
+            counts=counts,
+            failures=failures,
         )
 
     def fetch(self, query: str, **kwargs: Any) -> list[Article]:
@@ -182,6 +333,12 @@ class NewsScorer:
     def score(self, query: str, **kwargs: Any) -> ScoreResult:
         """Blocking version of :meth:`ascore`."""
         return _run(self.ascore(query, **kwargs))
+
+    def score_articles(
+        self, articles: Iterable[Article | Mapping[str, Any]], query: str, **kwargs: Any
+    ) -> ScoreResult:
+        """Blocking version of :meth:`ascore_articles`."""
+        return _run(self.ascore_articles(articles, query, **kwargs))
 
     async def aclose(self) -> None:
         if self.cache is not None:
@@ -203,10 +360,11 @@ class NewsScorer:
 
     async def _fetch(
         self, query: str, since: datetime, until: datetime, names: Iterable[str] | None
-    ) -> tuple[list[Article], list[str]]:
+    ) -> tuple[list[Article], list[str], int]:
+        """Returns (de-duplicated articles, errors, how many were fetched before de-duplication)."""
         selected = self._select(names)
         if not selected:
-            return [], ["no sources registered; add one with source_add() or `newsscore source add`"]
+            return [], ["no sources registered; add one with source_add() or `newsscore source add`"], 0
 
         async def one(source: NewsSource, client: httpx.AsyncClient) -> list[Article]:
             return await source.fetch(query, since, until, client)
@@ -224,43 +382,174 @@ class NewsScorer:
                 errors.append(str(result) if isinstance(result, SourceError) else f"{source.name}: {result!r}")
             else:
                 articles.extend(result)
-        return _dedupe(articles), errors
+        return _dedupe(articles), errors, len(articles)
 
-    async def _score(self, articles: Sequence[Article], query: str) -> tuple[list[ScoredArticle], list[str]]:
+    async def _score(
+        self, articles: Sequence[Article], query: str
+    ) -> tuple[list[ScoredArticle], list[str], list[ScoreFailure]]:
+        """Score what is not cached, keeping every success even when siblings fail."""
         if not articles:
-            return [], []
+            return [], [], []
         scores: dict[str, ArticleScore] = {}
         if self.cache is not None and self.scorer_name:
             scores.update(self.cache.get_many(self.scorer_name, query, (a.id for a in articles)))
         pending = [a for a in articles if a.id not in scores]
-        errors: list[str] = []
+        if not pending:
+            return [ScoredArticle(a, scores[a.id]) for a in articles if a.id in scores], [], []
 
-        semaphore = asyncio.Semaphore(self.concurrency)
-
-        async def run(batch: Sequence[Article]) -> dict[str, ArticleScore] | str:
-            async with semaphore:
-                try:
-                    result = await call_score_fn(self.score_fn, batch, query)
-                except Exception as exc:  # a bad batch must not sink the run
-                    return f"scorer failed on {len(batch)} article(s): {exc}"
-            return {a.id: s for a, s in zip(batch, result)}
-
+        state = _RunState(semaphore=asyncio.Semaphore(self.concurrency))
         batches = [pending[i : i + self.batch_size] for i in range(0, len(pending), self.batch_size)]
+        outcomes = await asyncio.gather(*(self._score_batch(b, query, state) for b in batches))
+
         fresh: dict[str, ArticleScore] = {}
-        for outcome in await asyncio.gather(*(run(b) for b in batches)):
-            if isinstance(outcome, str):
-                errors.append(outcome)
-            else:
-                fresh.update(outcome)
+        failures: dict[str, ScoreFailure] = {}
+        for ok, bad in outcomes:
+            fresh.update(ok)
+            failures.update(bad)
+
+        # Cache the successes even though siblings failed, so a rerun never pays twice.
         if fresh and self.cache is not None and self.scorer_name:
             self.cache.put_many(self.scorer_name, query, fresh)
         scores.update(fresh)
 
+        errors = [f"scoring stopped: {state.fatal}"] if state.fatal is not None else []
+        errors.extend(_summarise(failures.values()))
         scored = [ScoredArticle(a, scores[a.id]) for a in articles if a.id in scores]
-        return scored, errors
+        return scored, errors, sorted(failures.values(), key=lambda f: f.article_id)
+
+    async def _score_batch(
+        self, batch: Sequence[Article], query: str, state: "_RunState", attempt: int = 1
+    ) -> tuple[dict[str, ArticleScore], dict[str, ScoreFailure]]:
+        """One attempt at one batch. Never raises; returns (scores, failures) by article id.
+
+        A scorer that reports per-article errors (the preferred form) loses only the
+        articles it named. A scorer that raises loses nothing either: a retryable
+        error is retried, and anything else makes the batch split in half until the
+        offending article is alone, so its siblings still get scored.
+        """
+        if state.fatal is not None:  # a sibling already hit something run-wide
+            return {}, {a.id: _failure(a, state.fatal, attempt) for a in batch}
+        try:
+            async with state.semaphore:
+                results = await call_score_fn(self.score_fn, batch, query)
+        except Exception as exc:
+            return await self._recover(batch, query, state, attempt, _classify(exc))
+
+        ok: dict[str, ArticleScore] = {}
+        bad: dict[str, ScoreFailure] = {}
+        retry: list[Article] = []
+        for article, result in zip(batch, results):
+            if not isinstance(result, ScoreItemError):
+                ok[article.id] = result
+            elif result.fatal:
+                state.fatal = result
+                bad[article.id] = _failure(article, result, attempt)
+            elif result.retryable and attempt <= self.retries:
+                retry.append(article)
+            else:
+                bad[article.id] = _failure(article, result, attempt)
+
+        if retry:
+            await asyncio.sleep(_backoff(self.retry_backoff, attempt))
+            more_ok, more_bad = await self._score_batch(retry, query, state, attempt + 1)
+            ok.update(more_ok)
+            bad.update(more_bad)
+        return ok, bad
+
+    async def _recover(
+        self,
+        batch: Sequence[Article],
+        query: str,
+        state: "_RunState",
+        attempt: int,
+        error: ScoreItemError,
+    ) -> tuple[dict[str, ArticleScore], dict[str, ScoreFailure]]:
+        """The call itself raised, so every article in the batch is suspect."""
+        if error.fatal:  # bad credentials, missing dependency: stop, do not repeat it n times
+            state.fatal = error
+            return {}, {a.id: _failure(a, error, attempt) for a in batch}
+        if error.retryable and attempt <= self.retries:
+            await asyncio.sleep(_backoff(self.retry_backoff, attempt))
+            return await self._score_batch(batch, query, state, attempt + 1)
+        if len(batch) > 1:  # bisect: find the bad article instead of discarding the batch
+            half = len(batch) // 2
+            ok: dict[str, ArticleScore] = {}
+            bad: dict[str, ScoreFailure] = {}
+            for part in (batch[:half], batch[half:]):
+                part_ok, part_bad = await self._score_batch(part, query, state, attempt)
+                ok.update(part_ok)
+                bad.update(part_bad)
+            return ok, bad
+        return {}, {batch[0].id: _failure(batch[0], error, attempt)}
 
 
 # ---- module helpers -------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _RunState:
+    """Shared across the batches of one run so a run-wide failure stops the rest."""
+
+    semaphore: asyncio.Semaphore
+    fatal: ScoreItemError | None = None
+
+
+_RETRYABLE = (TimeoutError, ConnectionError, OSError)
+_FATAL = (ImportError,)
+
+
+def _classify(exc: BaseException) -> ScoreItemError:
+    """Turn any exception into a :class:`ScoreItemError` with a retry verdict.
+
+    A scorer that already knows better raises :class:`ScoreItemError` itself and is
+    passed through untouched.
+    """
+    if isinstance(exc, ScoreItemError):
+        return exc
+    return ScoreItemError(
+        safe_str(exc),
+        error_type=error_slug(type(exc).__name__),
+        retryable=isinstance(exc, _RETRYABLE),
+        fatal=isinstance(exc, _FATAL),
+    )
+
+
+def _failure(article: Article, error: ScoreItemError, attempts: int) -> ScoreFailure:
+    return ScoreFailure(
+        article_id=article.id,
+        source=article.source,
+        error_type=error.error_type,
+        message=safe_str(error),
+        attempts=attempts,
+    )
+
+
+def _backoff(base: float, attempt: int) -> float:
+    """Exponential backoff with jitter, so retries of one run do not arrive together."""
+    return base * (2 ** (attempt - 1)) * (0.5 + random.random()) if base > 0 else 0.0
+
+
+def _summarise(failures: Iterable[ScoreFailure]) -> list[str]:
+    """One human-readable line per distinct failure, with a count."""
+    tally: dict[tuple[str, str], int] = {}
+    for failure in failures:
+        key = (failure.error_type, failure.message)
+        tally[key] = tally.get(key, 0) + 1
+    return [
+        f"{count} article(s) failed to score [{error_type}]: {message}"
+        for (error_type, message), count in tally.items()
+    ]
+
+
+def _status(counts: RunCounts, scored: Sequence[ScoredArticle]) -> str:
+    """Which :class:`RunStatus` describes this run. See that class for the meanings."""
+    if counts.submitted == 0:
+        return RunStatus.NO_ARTICLES
+    if counts.scored == 0:
+        return RunStatus.ALL_FAILED
+    if not any(item.score.weight > 0 for item in scored):
+        return RunStatus.NO_WEIGHT  # scored fine, but 0.0 here means "no evidence"
+    return RunStatus.PARTIAL if counts.failed else RunStatus.OK
 
 
 def _window(days: float, since: datetime | None, until: datetime | None) -> tuple[datetime, datetime]:

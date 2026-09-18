@@ -9,7 +9,17 @@ from typing import Any, Callable
 
 from .jev import JevScorer
 from .keyword import KeywordScorer
-from .protocol import ScoreFn, ScoreItem, ScoreOutput, call_score_fn, normalise_scores, per_article, scorer_name
+from .protocol import (
+    ScoreFn,
+    ScoreItem,
+    ScoreItemError,
+    ScoreOutput,
+    ScorerUnavailable,
+    call_score_fn,
+    normalise_scores,
+    per_article,
+    scorer_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +53,8 @@ __all__ = [
     "SCORERS",
     "ScoreFn",
     "ScoreItem",
+    "ScoreItemError",
+    "ScorerUnavailable",
     "ScoreOutput",
     "JevScorer",
     "KeywordScorer",

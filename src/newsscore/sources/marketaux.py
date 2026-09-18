@@ -6,8 +6,10 @@ Option ``max_pages`` (default 3) bounds pagination; free plans return 3 items pe
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-import httpx
+if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for real
+    import httpx
 
 from ..models import Article
 from .base import NewsSource, in_window, parse_dt

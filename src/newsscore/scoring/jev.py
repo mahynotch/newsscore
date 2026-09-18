@@ -19,9 +19,27 @@ Requires ``pip install newsscore[jev]`` and ``TYPESAFE_API_KEY``.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import os
 from typing import Any, Sequence
 
 from ..models import Article, ArticleScore
+from .protocol import ScoreItemError, ScorerUnavailable, error_slug, safe_str
+
+# Jev's error taxonomy, matched by class name so this module never imports the
+# optional SDK just to classify. Names are checked across the whole MRO, so
+# subclasses (TypeSafeAPITimeoutError < TypeSafeAPIConnectionError) resolve too.
+RETRYABLE_ERRORS = frozenset(
+    {
+        "TypeSafeRateLimitError",
+        "TypeSafeInternalServerError",
+        "TypeSafeAPITimeoutError",
+        "TypeSafeAPIConnectionError",
+    }
+)
+# These will fail identically for every other article, so the run stops instead of
+# repeating the same rejection once per headline.
+FATAL_ERRORS = frozenset({"TypeSafeAuthenticationError", "TypeSafePermissionDeniedError"})
 
 SENTIMENT_LEVELS = [
     "Clearly negative for the company's stock: losses, misses, downgrades, lawsuits, guidance cuts.",
@@ -72,6 +90,30 @@ class JevScorer:
         self._client = client
         self._semaphore = asyncio.Semaphore(concurrency)
         self._questions: dict[str, Any] | None = None
+        if client is None:
+            self.preflight()
+
+    def preflight(self) -> None:
+        """Fail now if Jev cannot run here, rather than returning zeros later.
+
+        Asking for Jev explicitly and getting a silent 0.0 back is indistinguishable
+        from genuinely neutral news, so the dependency and the credential are checked
+        at construction. :func:`~newsscore.scoring.default_scorer` still falls back to
+        the keyword scorer, but only when Jev was *not* asked for by name.
+
+        Deliberately cheap: it locates the SDK without importing it and looks for a
+        key, so a fully cached run never pays to build a client it will not call. A
+        key that exists but is rejected surfaces on the first request instead, as a
+        fatal error that stops the run with the provider's own message.
+        """
+        if importlib.util.find_spec("typesafe_sdk") is None:
+            raise ScorerUnavailable(
+                "the Jev scorer needs the TypeSafe SDK: pip install 'newsscore[jev]'"
+            )
+        if not (self._api_key or os.environ.get("TYPESAFE_API_KEY")):
+            raise ScorerUnavailable(
+                "the Jev scorer needs an API key: pass api_key= or set TYPESAFE_API_KEY"
+            )
 
     # ---- setup -------------------------------------------------------------------
 
@@ -120,8 +162,23 @@ class JevScorer:
 
     # ---- scoring -----------------------------------------------------------------
 
-    async def __call__(self, articles: Sequence[Article], query: str) -> list[ArticleScore]:
-        return list(await asyncio.gather(*(self._score_one(a, query) for a in articles)))
+    async def __call__(
+        self, articles: Sequence[Article], query: str
+    ) -> list[ArticleScore | ScoreItemError]:
+        """One Jev call per article, each failing on its own.
+
+        Returns a :class:`~newsscore.ScoreItemError` in place of any article whose
+        request failed, so the rest of the batch is kept and cached.
+        """
+        results = await asyncio.gather(
+            *(self._score_one(a, query) for a in articles), return_exceptions=True
+        )
+        out: list[ArticleScore | ScoreItemError] = []
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            out.append(classify_error(result) if isinstance(result, BaseException) else result)
+        return out
 
     async def _score_one(self, article: Article, query: str) -> ArticleScore:
         state = {
@@ -167,6 +224,17 @@ class JevScorer:
         client, self._client = self._client, None
         if client is not None and hasattr(client, "aclose"):
             await client.aclose()
+
+
+def classify_error(exc: BaseException) -> ScoreItemError:
+    """Turn one Jev SDK exception into a retry verdict for the engine."""
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    return ScoreItemError(
+        safe_str(exc),
+        error_type=error_slug(type(exc).__name__),
+        retryable=bool(names & RETRYABLE_ERRORS) or isinstance(exc, (TimeoutError, ConnectionError)),
+        fatal=bool(names & FATAL_ERRORS) or isinstance(exc, ImportError),
+    )
 
 
 def _unit(value: Any) -> float:

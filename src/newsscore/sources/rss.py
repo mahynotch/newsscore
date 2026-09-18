@@ -14,9 +14,10 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
-import httpx
+if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for real
+    import httpx
 
 from ..models import Article
 from .base import NewsSource, SourceError, in_window, parse_dt
@@ -46,6 +47,8 @@ class RssSource(NewsSource):
     async def fetch(
         self, query: str, since: datetime, until: datetime, client: httpx.AsyncClient
     ) -> list[Article]:
+        import httpx
+
         url = self.url.replace("{query}", query)
         try:
             response = await client.get(url, headers={"Accept": "application/rss+xml, application/xml, text/xml, */*"})

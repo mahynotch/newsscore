@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-import httpx
+if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for real
+    import httpx
 
 from ..models import Article
 from .base import NewsSource, in_window, parse_dt
@@ -28,6 +30,8 @@ class PolygonSource(NewsSource):
     async def fetch(
         self, query: str, since: datetime, until: datetime, client: httpx.AsyncClient
     ) -> list[Article]:
+        import httpx
+
         params: dict[str, object] | None = {
             "ticker": query.upper(),
             "published_utc.gte": since.isoformat(),

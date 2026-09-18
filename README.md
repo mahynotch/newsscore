@@ -93,6 +93,8 @@ query       AAPL
 window      2026-09-10 .. 2026-09-17  (7 days)
 scorer      jev-v1
 articles    310
+status      ok
+counts      fetched=326 deduplicated=16 filtered=0 submitted=310 scored=310 failed=0
 score       +0.120   (-1 bearish .. +1 bullish)
 confidence  1.000
 by source   finnhub=+0.10  newsapi=+0.25  polygon=+0.28  yahoo=+0.10
@@ -168,12 +170,12 @@ scorer = NewsScorer(score_fn=per_article(lambda a, q: 0.5 if "beat" in a.text.lo
 |---|---|
 | **Signature** | `fn(articles: Sequence[Article], query: str)`, plain or `async` |
 | **Input** | `articles`: the batch (see `batch_size`, default 16). `query`: the symbol or keyword they were fetched for. Each `Article` has `id`, `source`, `title`, `published` (UTC), `url`, `summary`, `symbols`, `raw` (vendor payload) and `text` (title + summary). |
-| **Output** | A sequence with **one item per input article, same order**. Each item is an `ArticleScore`, **or** a number in `[-1, 1]`, **or** a dict `{"score": float, "confidence"?: float, "relevance"?: float, "labels"?: dict}`. |
+| **Output** | A sequence with **one item per input article, same order**. Each item is an `ArticleScore`, **or** a number in `[-1, 1]`, **or** a dict `{"score": float, "confidence"?: float, "relevance"?: float, "labels"?: dict}`, **or** a `ScoreItemError` to fail that one article. |
 | `score` | `-1.0` very bearish .. `+1.0` very bullish. |
 | `confidence` | `[0, 1]`, how sure the scorer is. Aggregation weight. Default `1.0`. |
 | `relevance` | `[0, 1]`, how much the article is about `query`. Aggregation weight. Default `1.0`. |
 | `labels` | Anything you want to keep (category, probabilities, model version). Stored in the cache. |
-| **Errors** | An exception fails only that batch. The message lands in `ScoreResult.errors`; other batches proceed. |
+| **Errors** | Return a `ScoreItemError` to fail one article and keep its siblings. Raising fails the batch, which the engine then retries and splits to isolate the bad article. Either way the failure lands in `ScoreResult.failures` and never enters the aggregate as neutral. |
 | **Caching** | Results are cached under `(scorer name, query, article id)`. Set `fn.name` or `NewsScorer(scorer_name=...)`; anonymous lambdas are not cached. |
 
 The full contract also lives in the docstring of `newsscore/scoring/protocol.py`.
@@ -238,6 +240,123 @@ confidence = 1 - exp(-sum(weight_i) / 3)      # ~0.63 with three solid fresh art
 
 Change the half-life with `NewsScorer(half_life_hours=24)` or replace the whole thing
 with `NewsScorer(aggregate_fn=my_fn)` where `my_fn(scored, now) -> Aggregate`.
+
+## Scoring news you already have
+
+If your pipeline already collects articles, skip the fetching entirely and use the
+scoring and aggregation on their own. Same scorer, same cache, same aggregator, so
+results are directly comparable with the fetching path.
+
+```python
+from newsscore import NewsScorer
+
+scorer = NewsScorer()                      # no sources needed
+result = scorer.score_articles(my_articles, "AAPL", as_of=cutoff)
+for item in result.articles:
+    print(item.article.id, item.score.score, item.score.confidence)
+```
+
+`my_articles` are `Article` objects or plain dicts shaped like `Article.to_dict()`.
+Only `title` and `published` are required; `id`, `source`, `url`, `summary` and
+`symbols` are **carried through exactly as given** and never regenerated, so the
+outcome for each article binds to your own id. Use `ascore_articles` in async code.
+
+* **`as_of`** is the reference time for decay *and* the eligibility cutoff. Articles
+  published after it are counted as `filtered`, not treated as fresh evidence. Fix it
+  to replay a run deterministically.
+* **One article, two targets is two tasks.** `score_articles(arts, "AAPL")` and
+  `score_articles(arts, "MSFT")` are scored, cached and reported independently —
+  relevance alone can differ enough to matter.
+* **Every input is accounted for** in `result.counts`, which is why `filtered` and
+  `deduplicated` are reported separately. Pass `dedupe=False` to keep syndicated copies.
+
+### From the command line
+
+```bash
+newsscore score-articles news.json -q AAPL                  # a file
+cat news.json | newsscore score-articles -q AAPL --json     # or stdin
+newsscore fetch AAPL --out news.json                        # this output is valid input
+```
+
+The input is either a JSON array of articles or an object carrying the target with them:
+
+```json
+{"query": "AAPL", "as_of": "2026-09-18T12:00:00Z", "articles": [
+  {"id": "a1", "source": "internal", "title": "Apple beats estimates",
+   "published": "2026-09-17T14:00:00Z", "url": "https://...", "symbols": ["AAPL"]}
+]}
+```
+
+`--scorer`, `--half-life`, `--no-cache`, `--articles`, `--json`, `--out` and `--fail-on`
+work exactly as they do for `newsscore score`.
+
+### Re-aggregating without paying again
+
+Changing how scores are combined needs no model calls at all. Hand the scored articles
+back with different settings:
+
+```python
+import json
+saved = json.loads(Path("aapl.json").read_text())
+
+NewsScorer(half_life_hours=12).aggregate_scored(saved["articles"], saved["query"],
+                                                as_of=saved["until"])
+```
+
+`aggregate_scored` is synchronous, never touches the network or the scorer, and returns
+a full `ScoreResult`. It is the cheap way to sweep a half-life over a saved run, or to
+re-score history after changing only the aggregation.
+
+## When a run goes wrong
+
+A sentiment of `0.0` can mean two completely different things, so every result carries
+a `status` and a reconcilable set of `counts`. Check the status before acting on the
+score.
+
+| `status` | meaning | `score` is |
+|---|---|---|
+| `ok` | every article scored, and the aggregate rests on real weight | a reading; `0.0` here is genuinely neutral news |
+| `partial` | some articles failed, the rest carry weight | a reading over fewer articles than you asked for |
+| `no_weight` | articles scored, but nothing carried weight (all zero confidence or relevance) | **not** a reading; `0.0` means "no evidence" |
+| `all_failed` | every scoring attempt failed | **not** a reading |
+| `no_articles` | nothing matched the window | **not** a reading |
+
+```python
+result = scorer.score("AAPL")
+if not result.ok:                       # True only for status == "ok"
+    print(result.status, result.counts, result.failures)
+```
+
+`counts` reconciles exactly: `fetched == deduplicated + filtered + submitted` and
+`submitted == scored + failed`, counted in scoring tasks (one article for one query).
+Every task that did not produce a score appears in `result.failures` with its article
+id, an `error_type` and the number of attempts made.
+
+### Failures are isolated, not fatal
+
+One bad article never costs you its batch. A scoring function reports a single failure
+by returning a `ScoreItemError`; one that raises instead is retried, then split in half
+repeatedly until the offending article is alone, so its siblings still get scored — and
+**successes are cached even when siblings fail**, so a rerun never pays for them twice.
+
+Retryable failures (timeouts, rate limits, 5xx) are retried with exponential backoff and
+jitter: `NewsScorer(retries=2, retry_backoff=0.5)`. Run-wide problems such as bad
+credentials stop the run instead of repeating the same rejection once per headline.
+
+### Strict exits for pipelines
+
+By default the CLI always exits 0. `--fail-on` turns the status into an exit code while
+still writing the JSON and the diagnostics:
+
+```bash
+newsscore score AAPL --json --fail-on unusable    # exit 3 if there is no usable aggregate
+newsscore score AAPL --json --fail-on partial     # exit 4 as well if any article failed
+```
+
+Asking for a scorer by name that cannot run here is an error, not a downgrade:
+`--scorer jev` without `TYPESAFE_API_KEY` exits 1 with a message rather than silently
+scoring with the keyword lexicon. Only the automatic default falls back, and only when
+you did not name a scorer.
 
 ## Where things are stored
 
