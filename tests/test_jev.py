@@ -74,7 +74,7 @@ class FakeClient:
 
 def test_call_path_uses_client_and_questions():
     client = FakeClient()
-    scorer = JevScorer(client=client, concurrency=2)
+    scorer = JevScorer(client=client, concurrency=2, impact=True)
     arts = [make_article("Apple beats"), make_article("Apple misses")]
     out = asyncio.run(scorer(arts, "AAPL"))
     assert [s.score for s in out] == [1.0, -1.0]
@@ -82,3 +82,57 @@ def test_call_path_uses_client_and_questions():
     assert client.calls[0][0]["query"] == "AAPL"
     asyncio.run(scorer.aclose())
     assert client.closed
+
+
+def test_scorer_survives_being_reused_across_sync_calls(monkeypatch):
+    """Each sync call runs its own event loop and closes it on the way out.
+
+    A client built on the first loop raises "Event loop is closed" on the next
+    call, so a scorer reused for a per-symbol loop failed every other time.
+    """
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    made: list[FakeClient] = []
+
+    class LoopBoundClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.loop = asyncio.get_running_loop()
+
+        async def system_one(self, *, state, questions):
+            if asyncio.get_running_loop() is not self.loop:
+                raise RuntimeError("Event loop is closed")
+            return await super().system_one(state=state, questions=questions)
+
+    def factory(**kwargs):
+        client = LoopBoundClient()
+        made.append(client)
+        return client
+
+    scorer = JevScorer(api_key="k")
+    real = scorer._sdk()  # keep the real question types, swap only the client
+    monkeypatch.setattr(
+        scorer,
+        "_sdk",
+        lambda: SimpleNamespace(
+            Score=real.Score, Noul=real.Noul, Choice=real.Choice, AsyncTypeSafeClient=factory
+        ),
+    )
+
+    articles = [make_article("AAPL beat estimates")]
+    for _ in range(3):
+        out = asyncio.run(scorer(articles, "AAPL"))
+        assert [type(o).__name__ for o in out] == ["ArticleScore"], out
+
+    assert len(made) == 3, "one client per event loop, rebuilt when the loop changes"
+
+
+def test_a_supplied_client_is_never_replaced(monkeypatch):
+    """A client handed in by the caller is theirs to manage, across loops too."""
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    mine = FakeClient()
+    scorer = JevScorer(api_key="k", client=mine)
+    articles = [make_article("AAPL beat estimates")]
+    asyncio.run(scorer(articles, "AAPL"))
+    asyncio.run(scorer(articles, "AAPL"))
+    assert scorer._client is mine
+    assert len(mine.calls) == 2

@@ -77,6 +77,13 @@ FailOnOpt = Annotated[
 ]
 FAIL_ON_LEVELS = ("none", "unusable", "partial")
 
+ImpactQuestionOpt = Annotated[
+    bool,
+    typer.Option(
+        "--impact",
+        help="Ask the scorer for expected impact (jev only; ~24% more tokens per article).",
+    ),
+]
 RelevanceOpt = Annotated[
     bool,
     typer.Option("--no-relevance", help="Drop the relevance term from aggregation."),
@@ -235,6 +242,7 @@ def score(
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours for aggregation.")] = 48.0,
     impact_weighting: ImpactOpt = False,
+    impact: ImpactQuestionOpt = False,
     no_relevance: RelevanceOpt = False,
     lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
@@ -260,12 +268,16 @@ def score(
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
             use_relevance=not no_relevance,
             lookback_hours=lookback,
+            scorer_options={"impact": True} if impact else None,
         )
     except ScorerUnavailable as exc:  # asked for a scorer by name that cannot run here
         _fail(str(exc))
+    except TypeError as exc:
+        _fail(f"--impact does not apply to this scorer: {exc}")
     result = _run(scorer, scorer.ascore(query, days=days, sources=source))
     code = _exit_code(result.status, fail_on)
 
+    _warn_inert_weighting(result, impact_weighting)
     _emit(result, scorer, code, window=f"  ({days:g} days)", articles=articles, as_json=as_json, out=out)
 
 
@@ -288,6 +300,7 @@ def score_articles(
     ] = None,
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours.")] = 48.0,
     impact_weighting: ImpactOpt = False,
+    impact: ImpactQuestionOpt = False,
     no_relevance: RelevanceOpt = False,
     lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
@@ -336,9 +349,12 @@ def score_articles(
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
             use_relevance=not no_relevance,
             lookback_hours=lookback,
+            scorer_options={"impact": True} if impact else None,
         )
     except ScorerUnavailable as exc:
         _fail(str(exc))
+    except TypeError as exc:
+        _fail(f"--impact does not apply to this scorer: {exc}")
     try:
         result = _run(
             scorer,
@@ -346,6 +362,7 @@ def score_articles(
         )
     except ValueError as exc:  # a malformed article: say which one, do not guess
         _fail(str(exc))
+    _warn_inert_weighting(result, impact_weighting)
     _emit(result, scorer, _exit_code(result.status, fail_on), articles=articles, as_json=as_json, out=out)
 
 
@@ -393,6 +410,25 @@ def _run(scorer: NewsScorer, coro):  # type: ignore[no-untyped-def]
             await scorer.aclose()
 
     return asyncio.run(go())
+
+
+def _warn_inert_weighting(result, impact_weighting: bool) -> None:
+    """Say so when impact weighting was asked for but nothing carries an impact label.
+
+    The two switches are independent -- the scorer has to be asked for impact, and
+    aggregation has to be told to weight by it -- so requesting one without the other
+    silently changes nothing. Cheaper to say it than to let a pipeline trust a knob
+    that is doing no work.
+    """
+    if not impact_weighting or not result.articles:
+        return
+    if any(item.score.expected_impact for item in result.articles):
+        return
+    typer.echo(
+        "warning: --impact-weighting had no effect: no article carries an expected "
+        "impact. Add --impact to ask for it (jev only), or drop --impact-weighting.",
+        err=True,
+    )
 
 
 def _emit(result, scorer, code: int, *, window: str = "", articles: int = 0, as_json: bool = False, out=None) -> None:

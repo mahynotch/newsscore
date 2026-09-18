@@ -393,7 +393,25 @@ for item in result.articles:
     print(f"{s.score:+.2f} {s.expected_impact or '-':>6}  {item.article.title}")
 ```
 
-It costs nothing extra: all five questions ride in the same `system_one` call.
+**The question is off by default**, because it costs about 24% more tokens per article
+and the label does nothing unless you also switch on impact weighting. Ask for it when
+you intend to use it:
+
+```python
+NewsScorer("jev", scorer_options={"impact": True})    # ask for it: ~24% more tokens
+JevScorer(impact=True, horizon="the next trading day")   # ask about a different period
+JevScorer(impact=True, impact_rubric={...})              # reword the three levels
+```
+
+or `--impact` on the command line. With the question off, `expected_impact` is `None`
+everywhere and nothing else changes -- see [Is impact worth
+asking for?](#is-impact-worth-asking-for) for the evidence.
+
+The rubric keys stay `low`/`medium`/`high` -- only their descriptions are yours, since
+`ArticleScore.expected_impact` and the weight mapping are defined on those three. The
+horizon, the rubric wording and whether the question is asked at all are **all part of
+the cache fingerprint**, so changing any of them rescores rather than reusing answers
+given to a different question.
 
 ### Weighting by impact
 
@@ -408,6 +426,60 @@ scorer = NewsScorer(impact_weights=IMPACT_WEIGHTS)     # or your own mapping
 Articles whose scorer supplies no impact weigh `1.0`, so enabling this changes only the
 articles that actually carry a judgement, and the `keyword` scorer or your own function
 keeps working untouched.
+
+### Is impact worth asking for?
+
+Short answer: **the label is real, but nothing shows it makes your number better.** It
+is off by default for that reason. The measurements below are from this repository's
+benchmark against the live Jev API on real news.
+
+**It is not a restatement of sentiment.** On 308 live AAPL articles, the best possible
+two-threshold rule on `|sentiment|` reproduces the impact label 71.8% of the time
+against a 70.1% majority-class baseline -- a 1.7pp gain, i.e. none. Normalised mutual
+information between `|sentiment|` and impact is 0.215, and AUC for ranking `high`
+against the rest is 0.70. Category and relevance each explain about as much as
+sentiment does. So the question really is asking something else.
+
+**It is reproducible.** Scoring the same 150 articles twice with identical settings
+changed the label 3.3% of the time, Cohen's kappa 0.92. The signal is not sampling noise.
+
+**Asking it does not disturb the other answers.** Differences in sentiment, confidence
+and relevance between the impact-on and impact-off arms are indistinguishable from the
+run-to-run noise floor (max |delta| 0.100 against 0.095 measured on identical repeats,
+median zero, no directional bias).
+
+**Most articles are `low`.** 70.3% low, 24.5% medium, 5.2% high. Under `IMPACT_WEIGHTS`
+only 30% of articles get a weight other than `1.0`.
+
+**It moves the answer a little, and sometimes flips it.**
+
+| basket size | median abs. change | p90 | sign flips |
+|---|---|---|---|
+| 5 articles | 0.020 | 0.094 | 4.2% |
+| 10 articles | 0.033 | 0.111 | 7.2% |
+| 20 articles | 0.028 | 0.086 | 6.8% |
+| 40 articles | 0.021 | 0.068 | 8.5% |
+
+**But it is not validated against what actually happened.** On 597 articles across 20
+symbols with daily bars, measuring each article's move as a market-beta residual scaled
+by the symbol's own residual volatility:
+
+| | low | medium | high | high - low | p |
+|---|---|---|---|---|---|
+| news day + next | 0.677 | 0.642 | 0.739 | +0.062 | 0.213 |
+| 5 days forward | 0.492 | 0.616 | 0.677 | +0.185 | 0.084 |
+
+The five-day ordering is monotone and in the right direction, which is what a weak but
+real signal looks like; it is not significant at conventional levels, and the one-day
+test is flat. Switching impact weighting on did not improve how well the daily
+aggregate tracked the forward residual return (Spearman -0.036 to -0.032 -- both
+indistinguishable from zero, in a window where plain sentiment had no forward power
+either). With only 18 `high`-impact articles in the sample this study is underpowered:
+settling it at conventional significance would take on the order of 15,000 scored
+articles, given a ~3-5% base rate for `high`.
+
+So: a stable, non-redundant label, of unproven value, that costs 24% more and changes
+your number by about 0.03. Turn it on if you plan to validate it on your own universe.
 
 Before you put a 3× weight on `high`, label a few hundred headlines yourself and check
 the labels agree with you. See the caveat at the end of this file.

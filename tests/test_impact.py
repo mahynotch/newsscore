@@ -156,3 +156,80 @@ def test_cli_exposes_impact_in_json_and_respects_the_flag(monkeypatch):
     assert json.loads(weighted.stdout)["score"] != pytest.approx(payload["score"]), (
         "the flag must actually change the aggregate"
     )
+
+
+# ---- the impact question is optional ---------------------------------------------------
+
+
+def test_impact_question_can_be_switched_on():
+    """Asking for impact costs tokens, so a caller opts in when they will weight by it."""
+    from newsscore import JevScorer
+
+    on = JevScorer(api_key="k", impact=True)
+    off = JevScorer(api_key="k")
+    assert on.asks_impact and not off.asks_impact
+    assert "impact" in on._question_spec()
+    assert "impact" not in off._question_spec()
+
+
+def test_asking_or_not_is_part_of_the_cache_identity():
+    """The two ask different things, so they must not share cached answers."""
+    from newsscore import JevScorer
+
+    assert JevScorer(api_key="k", impact=True).fingerprint != JevScorer(api_key="k").fingerprint
+
+
+def test_impact_rubric_is_configurable_and_validated():
+    from newsscore import JevScorer
+    from newsscore.scoring.jev import IMPACT_RUBRIC
+
+    reworded = {**IMPACT_RUBRIC, "high": "Anything a PM would act on before the next open."}
+    asked = JevScorer(api_key="k", impact=True)
+    assert JevScorer(api_key="k", impact=True, impact_rubric=reworded).fingerprint != asked.fingerprint
+
+    with pytest.raises(ValueError, match="impact_rubric"):
+        JevScorer(api_key="k", impact_rubric={"small": "x", "big": "y"})
+
+
+def test_the_impact_question_is_off_by_default():
+    """It costs ~24% more tokens and is inert unless impact_weights is also on.
+
+    Measured over 308 AAPL articles: the label is reproducible (Cohen's kappa 0.92)
+    and not implied by sentiment, but nothing validates it against realised moves,
+    so the question and the weighting are opted into together rather than apart.
+    """
+    from newsscore import JevScorer
+
+    assert JevScorer(api_key="k").asks_impact is False
+    assert JevScorer(api_key="k", impact=True).asks_impact is True
+
+
+def test_scorer_options_reach_a_scorer_named_by_string(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")  # conftest strips it; preflight wants one
+    scorer = NewsScorer(score_fn="jev", cache=False, scorer_options={"impact": False})
+    assert scorer.score_fn.asks_impact is False
+
+
+def test_scorer_options_are_rejected_for_an_instance():
+    from newsscore import KeywordScorer
+
+    with pytest.raises(TypeError, match="scorer_options"):
+        NewsScorer(score_fn=KeywordScorer(), cache=False, scorer_options={"impact": False})
+
+
+def test_cli_no_impact_reports_clearly_for_a_scorer_without_it():
+    _save_source([make_article("AAPL beats estimates", hours_ago=1)])
+    result = runner.invoke(app, ["score", "AAPL", "-d", "30", "--scorer", "keyword", "--impact"])
+    assert result.exit_code == 1
+    assert "--impact does not apply" in result.stderr
+
+
+def test_impact_weighting_without_the_question_says_so():
+    """The two switches are independent, so asking for one alone does nothing."""
+    _save_source([make_article("AAPL beats estimates", hours_ago=1)])
+    args = ["score", "AAPL", "-d", "30", "--scorer", "keyword", "--no-cache"]
+    quiet = runner.invoke(app, args)
+    warned = runner.invoke(app, [*args, "--impact-weighting"])
+    assert "had no effect" not in quiet.stderr
+    assert "--impact-weighting had no effect" in warned.stderr
+    assert warned.exit_code == quiet.exit_code, "a warning, not a failure"

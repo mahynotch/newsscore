@@ -61,6 +61,8 @@ class NewsScorer:
         score_fn: A scoring function (see ``newsscore.scoring.protocol``), the
             name of a built-in one (``"jev"``, ``"keyword"``) or ``None`` for the default.
         scorer_name: Stable cache key for ``score_fn``; inferred when possible.
+        scorer_options: Keyword arguments for a built-in scorer named by string, e.g.
+            ``NewsScorer("jev", scorer_options={"impact": False})``.
         cache: ``True`` for the default SQLite cache, ``False`` to disable, or a path.
         half_life_hours: Decay half-life used by the default aggregator.
         impact_weights: Switch on impact weighting with a mapping such as
@@ -85,6 +87,7 @@ class NewsScorer:
         score_fn: ScoreFn | str | None = None,
         *,
         scorer_name: str | None = None,
+        scorer_options: Mapping[str, Any] | None = None,
         cache: bool | str | Path = True,
         half_life_hours: float = 48.0,
         impact_weights: Mapping[str, float] | None = None,
@@ -99,8 +102,14 @@ class NewsScorer:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.score_fn: ScoreFn = (
-            default_scorer() if score_fn is None else make_scorer(score_fn) if isinstance(score_fn, str) else score_fn
+            default_scorer()
+            if score_fn is None
+            else make_scorer(score_fn, **dict(scorer_options or {}))
+            if isinstance(score_fn, str)
+            else score_fn
         )
+        if scorer_options and not isinstance(score_fn, str):
+            raise TypeError("scorer_options only applies when score_fn is a built-in scorer's name")
         self.scorer_name = scorer_name or _infer_name(self.score_fn)
         self.aggregate_fn = aggregate_fn or make_aggregator(
             half_life_hours,
@@ -259,8 +268,8 @@ class NewsScorer:
             A :class:`~newsscore.ScoreResult` whose ``counts`` account for every item
             handed in: ``fetched == deduplicated + filtered + submitted``.
         """
-        until = to_utc(as_of) if as_of else utcnow()
-        lower = to_utc(since) if since else None
+        until = parse_dt(as_of) if as_of else utcnow()
+        lower = parse_dt(since) if since else None
         supplied = [a if isinstance(a, Article) else Article.from_dict(a) for a in articles]
 
         eligible = [
@@ -301,9 +310,7 @@ class NewsScorer:
                 saved["articles"], saved["query"], as_of=saved["until"]
             )
         """
-        until = (
-            to_utc(as_of) if isinstance(as_of, datetime) else parse_dt(as_of) if as_of else utcnow()
-        )
+        until = parse_dt(as_of) if as_of else utcnow()
         supplied = [s if isinstance(s, ScoredArticle) else ScoredArticle.from_dict(s) for s in scored]
         eligible = [s for s in supplied if s.article.published <= until]
         items = sorted(eligible, key=lambda s: s.article.published, reverse=True)
@@ -640,8 +647,8 @@ def _status(
 
 
 def _window(days: float, since: datetime | None, until: datetime | None) -> tuple[datetime, datetime]:
-    until = to_utc(until) if until else utcnow()
-    since = to_utc(since) if since else until - timedelta(days=days)
+    until = parse_dt(until) if until else utcnow()
+    since = parse_dt(since) if since else until - timedelta(days=days)
     if since > until:
         raise ValueError("since must be before until")
     return since, until

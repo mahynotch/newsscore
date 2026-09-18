@@ -34,9 +34,9 @@ import json
 import os
 import re
 import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
-from ..models import Article, ArticleScore
+from ..models import IMPACT_LEVELS, Article, ArticleScore
 from .protocol import ScoreItemError, ScorerUnavailable, error_slug, safe_str
 
 # Jev's error taxonomy, matched by class name so this module never imports the
@@ -75,13 +75,16 @@ SENTIMENT_LEVELS = [
     "Clearly positive for the company's stock: strong beats, raised guidance, major wins.",
 ]
 
+#: Default wording for the three impact levels. Override the text with
+#: ``JevScorer(impact_rubric=...)``; the three keys themselves are fixed, because
+#: ``ArticleScore.expected_impact`` and the impact weight mapping are defined on them.
 #: The period the impact question asks about. The quant use case is the potential
 #: effect on the stock over the next few trading days, not the article's mood and not
 #: a long-run view. Change it with ``JevScorer(horizon=...)``; it is part of the cache
 #: fingerprint, so a different horizon never reuses answers given for another one.
 DEFAULT_HORIZON = "the next 1 to 5 trading days"
 
-IMPACT_LEVELS = {
+IMPACT_RUBRIC = {
     "low": (
         "Immaterial for the stock: routine, incremental, already widely known or "
         "priced in. A typical investor would not revise their view."
@@ -119,6 +122,13 @@ class JevScorer:
             a mutable alias such as ``"jev-latest"`` disables caching for this scorer.
         horizon: The period the impact question asks about. Defaults to
             :data:`DEFAULT_HORIZON`. Part of the cache fingerprint.
+        impact: Ask the expected-impact question. Off by default: it costs ~24% more
+            tokens per article and the label does nothing unless you also switch on
+            ``impact_weights`` in aggregation, so the two are opted into together.
+            See the benchmark in the README before turning it on.
+        impact_rubric: Override the wording of the three levels. The keys stay
+            ``low``/``medium``/``high``; only the descriptions change. Part of the
+            cache fingerprint, so a reworded rubric never reuses old answers.
         concurrency: Max in-flight Jev requests.
         timeout: Per-request timeout in seconds.
         client: An existing ``AsyncTypeSafeClient`` to reuse instead of creating one.
@@ -132,15 +142,27 @@ class JevScorer:
         model: str | None = None,
         *,
         horizon: str | None = None,
+        impact: bool = False,
+        impact_rubric: Mapping[str, str] | None = None,
         concurrency: int = 8,
         timeout: float = 30.0,
         client: Any | None = None,
     ) -> None:
         self._api_key = api_key
+        self._impact = impact
+        self._impact_rubric = dict(impact_rubric or IMPACT_RUBRIC)
+        if set(self._impact_rubric) != set(IMPACT_LEVELS):
+            raise ValueError(
+                f"impact_rubric must describe exactly {IMPACT_LEVELS}, "
+                f"got {sorted(self._impact_rubric)}"
+            )
         self._horizon = horizon or DEFAULT_HORIZON
         self._model = model or DEFAULT_MODEL
         self._timeout = timeout
         self._client = client
+        self._owns_client = client is None
+        self._loop: Any = None  # the loop _client and _semaphore were built on
+        self._concurrency = concurrency
         self._semaphore = asyncio.Semaphore(concurrency)
         self._questions: dict[str, Any] | None = None
         if client is None:
@@ -157,6 +179,11 @@ class JevScorer:
         return self._horizon
 
     @property
+    def asks_impact(self) -> bool:
+        """Whether the expected-impact question is part of the request."""
+        return self._impact
+
+    @property
     def fingerprint(self) -> str | None:
         """Digest of everything that can change an answer, or ``None`` to refuse caching.
 
@@ -170,7 +197,7 @@ class JevScorer:
             "model": self._model,
             "levels": SENTIMENT_LEVELS,
             "categories": CATEGORIES,
-            "impact_levels": IMPACT_LEVELS,
+            "impact_levels": self._impact_rubric if self._impact else None,
             "horizon": self._horizon,
             "questions": sorted(self._question_spec().items()),
         }
@@ -179,16 +206,19 @@ class JevScorer:
 
     def _question_spec(self) -> dict[str, str]:
         """The instruction text of each question, as it goes to the model."""
-        return {
-            "impact": (
+        spec: dict[str, str] = {}
+        if self._impact:
+            spec["impact"] = (
                 "How material is this news for the company named in `query`, over "
                 f"{self._horizon}? Judge how much it should change an investor's view "
                 "of the stock, NOT how good or bad the news is. Strongly negative and "
                 "strongly positive news can both be high impact, and mild news of "
                 "either sign can be low impact. Routine, incremental or already "
                 "widely reported items are low."
-            ),
-            "sentiment": (
+            )
+        spec.update(
+            {
+                "sentiment": (
                 "How would an investor in the company named in `query` read this news? "
                 "Judge the implication for the stock, not the general mood of the text."
             ),
@@ -196,12 +226,14 @@ class JevScorer:
                 "Is this article materially about the company or asset named in `query`, "
                 "rather than mentioning it in passing?"
             ),
-            "category": "What kind of news is this, for the company in `query`?",
-            "novel": (
-                "Does the article contain new information (an event, number or decision), "
-                "as opposed to commentary or a rehash of earlier news?"
-            ),
-        }
+                "category": "What kind of news is this, for the company in `query`?",
+                "novel": (
+                    "Does the article contain new information (an event, number or decision), "
+                    "as opposed to commentary or a rehash of earlier news?"
+                ),
+            }
+        )
+        return spec
 
     def preflight(self) -> None:
         """Fail now if Jev cannot run here, rather than returning zeros later.
@@ -236,6 +268,27 @@ class JevScorer:
             ) from exc
         return typesafe_sdk
 
+    def _rebind(self) -> None:
+        """Rebuild the client and semaphore when the running event loop has changed.
+
+        Every synchronous call goes through its own ``asyncio.run``, which closes the
+        loop on the way out. A client built on that loop raises ``Event loop is
+        closed`` on its next request, so scoring twice through the sync API with one
+        scorer would fail the second time. Noticing the change here keeps a reused
+        scorer working, which is the ordinary shape of a per-symbol loop.
+
+        The dead client is dropped rather than closed: its transport belongs to a loop
+        that is already closed, and awaiting ``aclose`` on it would raise. A client
+        handed in by the caller is theirs to manage and is never replaced.
+        """
+        loop = asyncio.get_running_loop()
+        if self._loop is loop:
+            return
+        if self._owns_client:
+            self._client = None
+        self._semaphore = asyncio.Semaphore(self._concurrency)
+        self._loop = loop
+
     def _get_client(self) -> Any:
         if self._client is None:
             sdk = self._sdk()
@@ -251,8 +304,12 @@ class JevScorer:
             self._questions = {
                 "sentiment": sdk.Score(instructions=spec["sentiment"], criteria=SENTIMENT_LEVELS),
                 "relevant": sdk.Noul(instructions=spec["relevant"]),
-                "impact": sdk.Choice(instructions=spec["impact"], criteria=IMPACT_LEVELS),
                 "category": sdk.Choice(instructions=spec["category"], criteria=CATEGORIES),
+                **(
+                    {"impact": sdk.Choice(instructions=spec["impact"], criteria=self._impact_rubric)}
+                    if self._impact
+                    else {}
+                ),
                 "novel": sdk.Noul(instructions=spec["novel"]),
             }
         return self._questions
@@ -267,6 +324,7 @@ class JevScorer:
         Returns a :class:`~newsscore.ScoreItemError` in place of any article whose
         request failed, so the rest of the batch is kept and cached.
         """
+        self._rebind()
         results = await asyncio.gather(
             *(self._score_one(a, query) for a in articles), return_exceptions=True
         )
@@ -334,6 +392,7 @@ class JevScorer:
 
     async def aclose(self) -> None:
         client, self._client = self._client, None
+        self._loop = None
         if client is not None and hasattr(client, "aclose"):
             await client.aclose()
 
