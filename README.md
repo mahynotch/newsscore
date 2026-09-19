@@ -706,7 +706,7 @@ or they fall back to pytest's temporary directory.
 
 ## Status: what has and has not been tested live
 
-This is a 0.1 release built and verified on one machine with the API plans its
+This is a 0.2 release built and verified on one machine with the API plans its
 author happens to have. Every source has unit tests against fixture payloads that
 follow the provider's documented response shape, but only some have been run
 against the real endpoint.

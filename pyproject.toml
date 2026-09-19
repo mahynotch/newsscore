@@ -2,9 +2,15 @@
 requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
+# One source of truth for the number. The package exposes __version__, the CLI prints
+# it and the HTTP User-Agent carries it, so a second copy here would drift the moment
+# one of them was bumped alone.
+[tool.hatch.version]
+path = "src/newsscore/_version.py"
+
 [project]
 name = "newsscore"
-version = "0.1.0"
+dynamic = ["version"]
 description = "News sentiment scoring for stocks. Mainstream news APIs in, a pluggable scorer (TypeSafe Jev by default), one score per symbol out."
 readme = "README.md"
 requires-python = ">=3.10"
