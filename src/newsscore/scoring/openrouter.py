@@ -19,6 +19,11 @@ credential             ``TYPESAFE_API_KEY``            ``OPENROUTER_API_KEY``
 ``[jev]`` extra        required                        not needed
 =====================  ==============================  ================================
 
+Model ids differ in spelling as well as namespace. OpenRouter marks a floating alias
+with a leading ``~``: ``~typesafe/jev-latest`` moves, ``typesafe/jev-1.13`` and the
+dated ``typesafe/jev-1.13-20260917`` do not. An alias is unpinned, so it disables
+caching here for the same reason ``jev-latest`` does on TypeSafe.
+
 Two things are worth knowing before relying on it.
 
 The Decisions endpoint is **alpha** at OpenRouter, which means its shape may change

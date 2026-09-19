@@ -78,9 +78,17 @@ OpenRouter accepts it directly.
 The provider is therefore part of the cache fingerprint, and scores fetched through one
 route are never reused for the other. Switching providers means rescoring.
 
+OpenRouter spells its floating aliases with a leading `~`, so the moving pointer is
+`~typesafe/jev-latest` and the pinned versions are `typesafe/jev-1.13` and the dated
+`typesafe/jev-1.13-20260917`. As on TypeSafe, **asking for an alias switches caching
+off** rather than filing answers under a name that may mean something else tomorrow:
+
+```python
+JevScorer(provider="openrouter", model="~typesafe/jev-latest").fingerprint is None
+```
+
 One more caveat: OpenRouter's Decisions endpoint is **alpha**, so its shape can change
-without a deprecation period. There is no `typesafe/jev-latest` on OpenRouter; only
-concrete versions exist.
+without a deprecation period.
 
 ### Do I need the `[jev]` extra?
 

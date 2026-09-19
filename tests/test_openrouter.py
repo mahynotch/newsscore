@@ -110,7 +110,19 @@ def test_the_provider_is_part_of_the_cache_identity():
 
 
 def test_an_alias_still_refuses_to_cache():
-    assert JevScorer(api_key="k", provider="openrouter", model="typesafe/jev-latest").fingerprint is None
+    """OpenRouter spells a floating alias with a leading ~; it must not be cached.
+
+    The pinned ids are `typesafe/jev-1.13` and the dated `typesafe/jev-1.13-20260917`;
+    `~typesafe/jev-latest` moves, so answers filed under it could come from anywhere.
+    """
+    alias = JevScorer(api_key="k", provider="openrouter", model="~typesafe/jev-latest")
+    assert alias.fingerprint is None
+    for pinned in ("typesafe/jev-1.13", "typesafe/jev-1.13-20260917"):
+        assert JevScorer(api_key="k", provider="openrouter", model=pinned).fingerprint
+
+    dated = JevScorer(api_key="k", provider="openrouter", model="typesafe/jev-1.13-20260917")
+    floating = JevScorer(api_key="k", provider="openrouter", model="typesafe/jev-1.13")
+    assert dated.fingerprint != floating.fingerprint, "different ids, different cache"
 
 
 # ---- conversion -------------------------------------------------------------------
