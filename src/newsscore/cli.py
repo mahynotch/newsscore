@@ -77,6 +77,17 @@ FailOnOpt = Annotated[
 ]
 FAIL_ON_LEVELS = ("none", "unusable", "partial")
 
+ProviderOpt = Annotated[
+    Optional[str],
+    typer.Option(
+        "--provider",
+        help=(
+            "Which route to take to Jev: 'typesafe' (needs the SDK and TYPESAFE_API_KEY) "
+            "or 'openrouter' (no SDK, needs OPENROUTER_API_KEY). Default: whichever is "
+            "configured, preferring typesafe."
+        ),
+    ),
+]
 ImpactQuestionOpt = Annotated[
     bool,
     typer.Option(
@@ -243,6 +254,7 @@ def score(
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours for aggregation.")] = 48.0,
     impact_weighting: ImpactOpt = False,
     impact: ImpactQuestionOpt = False,
+    provider: ProviderOpt = None,
     no_relevance: RelevanceOpt = False,
     lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
@@ -268,12 +280,12 @@ def score(
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
             use_relevance=not no_relevance,
             lookback_hours=lookback,
-            scorer_options={"impact": True} if impact else None,
+            scorer_options=_scorer_options(impact, provider),
         )
     except ScorerUnavailable as exc:  # asked for a scorer by name that cannot run here
         _fail(str(exc))
     except TypeError as exc:
-        _fail(f"--impact does not apply to this scorer: {exc}")
+        _fail(f"--impact/--provider do not apply to this scorer: {exc}")
     result = _run(scorer, scorer.ascore(query, days=days, sources=source))
     code = _exit_code(result.status, fail_on)
 
@@ -301,6 +313,7 @@ def score_articles(
     half_life: Annotated[float, typer.Option("--half-life", help="Decay half-life in hours.")] = 48.0,
     impact_weighting: ImpactOpt = False,
     impact: ImpactQuestionOpt = False,
+    provider: ProviderOpt = None,
     no_relevance: RelevanceOpt = False,
     lookback: LookbackOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Do not read or write the score cache.")] = False,
@@ -349,12 +362,12 @@ def score_articles(
             impact_weights=IMPACT_WEIGHTS if impact_weighting else None,
             use_relevance=not no_relevance,
             lookback_hours=lookback,
-            scorer_options={"impact": True} if impact else None,
+            scorer_options=_scorer_options(impact, provider),
         )
     except ScorerUnavailable as exc:
         _fail(str(exc))
     except TypeError as exc:
-        _fail(f"--impact does not apply to this scorer: {exc}")
+        _fail(f"--impact/--provider do not apply to this scorer: {exc}")
     try:
         result = _run(
             scorer,
@@ -396,7 +409,9 @@ def doctor() -> None:
         missing.append("typesafe-sdk not installed (pip install 'newsscore[jev]' or uv sync)")
     if not os.environ.get("TYPESAFE_API_KEY"):
         missing.append("TYPESAFE_API_KEY not set")
-    typer.echo(f"jev scorer    {'ready' if not missing else 'unavailable: ' + '; '.join(missing)}")
+    typer.echo(f"jev/typesafe  {'ready' if not missing else 'unavailable: ' + '; '.join(missing)}")
+    router = "ready" if os.environ.get("OPENROUTER_API_KEY") else "unavailable: OPENROUTER_API_KEY not set"
+    typer.echo(f"jev/openrouter {router}")
 
 
 # ---- helpers ---------------------------------------------------------------------------
@@ -410,6 +425,20 @@ def _run(scorer: NewsScorer, coro):  # type: ignore[no-untyped-def]
             await scorer.aclose()
 
     return asyncio.run(go())
+
+
+def _scorer_options(impact: bool, provider: str | None) -> dict[str, object] | None:
+    """Options for a scorer named by string, or ``None`` when the defaults will do.
+
+    Kept empty unless something was actually asked for, because passing options at
+    all is what rejects a scorer that does not take them.
+    """
+    options: dict[str, object] = {}
+    if impact:
+        options["impact"] = True
+    if provider:
+        options["provider"] = provider
+    return options or None
 
 
 def _warn_inert_weighting(result, impact_weighting: bool) -> None:

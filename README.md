@@ -31,6 +31,57 @@ pip install -e ".[jev,dev]"     # editable, with the Jev SDK and the test tools
 
 Python 3.10+. Runtime dependencies: `httpx`, `typer`, `platformdirs`.
 
+### Two ways to reach Jev
+
+`newsscore` can call Jev either directly or through OpenRouter. The questions asked are
+identical -- one definition renders into both wire formats -- so the only differences
+are the credential, the dependency and who bills you.
+
+| | `provider="typesafe"` | `provider="openrouter"` |
+|---|---|---|
+| credential | `TYPESAFE_API_KEY` | `OPENROUTER_API_KEY` |
+| needs `[jev]` extra | yes | **no**, just `httpx` |
+| model id | `jev-1.13.0` | `typesafe/jev-1.13` |
+| endpoint | `POST /v1/systemone` | `POST /api/alpha/decisions` |
+| sign-up | waiting list | open |
+
+```bash
+newsscore score AAPL --scorer jev --provider openrouter
+```
+
+```python
+NewsScorer("jev", scorer_options={"provider": "openrouter"})
+```
+
+Leave it unset and whichever key you have is used, preferring TypeSafe, so an existing
+setup keeps working untouched. `newsscore doctor` reports both routes.
+
+#### Do the two routes agree?
+
+Measured, rather than assumed. The same 310 AAPL articles were scored down both routes:
+
+| | TypeSafe vs OpenRouter | same route, scored twice |
+|---|---|---|
+| impact label agreement | 97.1% (kappa 0.934) | 96.7% (kappa 0.92) |
+| category agreement | 97.7% | 99.3% |
+| sentiment, max abs. difference | 0.095 | 0.095 |
+| tokens per article | 1241 | 1241 |
+| aggregate over all 310 | +0.1160 | +0.1170 |
+
+**The gap between providers is no bigger than the model's own run-to-run variation**,
+so the benchmark in [Is impact worth asking for?](#is-impact-worth-asking-for) carries
+over. That is evidence, not a guarantee: OpenRouter resolves `typesafe/jev-1.13` to a
+dated build (`typesafe/jev-1.13-20260917`, visible in `labels["model"]`), and it is
+free to resolve it elsewhere later. Pin the dated id yourself if that matters --
+OpenRouter accepts it directly.
+
+The provider is therefore part of the cache fingerprint, and scores fetched through one
+route are never reused for the other. Switching providers means rescoring.
+
+One more caveat: OpenRouter's Decisions endpoint is **alpha**, so its shape can change
+without a deprecation period. There is no `typesafe/jev-latest` on OpenRouter; only
+concrete versions exist.
+
 ### Do I need the `[jev]` extra?
 
 Only for the default scorer. `[jev]` adds one package, `typesafe-sdk`, and `JevScorer` is

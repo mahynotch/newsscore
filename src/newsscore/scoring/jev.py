@@ -22,7 +22,14 @@ bullish and low impact. The impact rubric says so explicitly, because a model as
 casually will otherwise read impact off the strength of the sentiment.
 
 All five questions ride in one ``system_one`` call, so impact costs no extra request.
-Requires ``pip install newsscore[jev]`` and ``TYPESAFE_API_KEY``.
+
+Jev can be reached two ways. ``provider="typesafe"`` calls TypeSafe directly and needs
+``pip install newsscore[jev]`` plus ``TYPESAFE_API_KEY``. ``provider="openrouter"``
+goes through OpenRouter's Decisions router, needs no SDK, and reads
+``OPENROUTER_API_KEY`` -- useful while TypeSafe's own sign-up is behind a waiting list.
+Left unset, whichever is configured is used, preferring TypeSafe. The provider is part
+of the cache fingerprint: the two are believed to be the same model, but that is not
+something this library asserts on your behalf.
 """
 
 from __future__ import annotations
@@ -60,6 +67,12 @@ FATAL_ERRORS = frozenset({"TypeSafeAuthenticationError", "TypeSafePermissionDeni
 # for an alias is allowed and switches caching off rather than risking answers from an
 # unknown model. Raise this deliberately, and expect scores to move when you do.
 DEFAULT_MODEL = "jev-1.13.0"
+
+#: The default model id for each route. They name the same version in each provider's
+#: own spelling; OpenRouter namespaces the publisher, TypeSafe does not.
+DEFAULT_MODELS = {"typesafe": DEFAULT_MODEL, "openrouter": "typesafe/jev-1.13"}
+PROVIDERS = tuple(DEFAULT_MODELS)
+
 _PINNED = re.compile(r"\d+\.\d+")
 
 
@@ -117,9 +130,13 @@ class JevScorer:
 
     Args:
         api_key: Overrides ``TYPESAFE_API_KEY``.
-        model: Which Jev version to ask for. Defaults to :data:`DEFAULT_MODEL`, a
-            pinned version, so cached scores always belong to a known model. Passing
+        model: Which Jev version to ask for. Defaults to the pinned version for the
+            chosen provider, so cached scores always belong to a known model. Passing
             a mutable alias such as ``"jev-latest"`` disables caching for this scorer.
+        provider: ``"typesafe"`` to call TypeSafe directly, or ``"openrouter"`` to go
+            through OpenRouter's Decisions router, which needs no SDK and reads
+            ``OPENROUTER_API_KEY``. Defaults to whichever is configured, preferring
+            TypeSafe. Part of the cache fingerprint.
         horizon: The period the impact question asks about. Defaults to
             :data:`DEFAULT_HORIZON`. Part of the cache fingerprint.
         impact: Ask the expected-impact question. Off by default: it costs ~24% more
@@ -141,6 +158,7 @@ class JevScorer:
         api_key: str | None = None,
         model: str | None = None,
         *,
+        provider: str | None = None,
         horizon: str | None = None,
         impact: bool = False,
         impact_rubric: Mapping[str, str] | None = None,
@@ -149,6 +167,7 @@ class JevScorer:
         client: Any | None = None,
     ) -> None:
         self._api_key = api_key
+        self._provider = _resolve_provider(provider, api_key)
         self._impact = impact
         self._impact_rubric = dict(impact_rubric or IMPACT_RUBRIC)
         if set(self._impact_rubric) != set(IMPACT_LEVELS):
@@ -157,7 +176,7 @@ class JevScorer:
                 f"got {sorted(self._impact_rubric)}"
             )
         self._horizon = horizon or DEFAULT_HORIZON
-        self._model = model or DEFAULT_MODEL
+        self._model = model or DEFAULT_MODELS[self._provider]
         self._timeout = timeout
         self._client = client
         self._owns_client = client is None
@@ -172,6 +191,11 @@ class JevScorer:
     def model(self) -> str:
         """The model version being requested."""
         return self._model
+
+    @property
+    def provider(self) -> str:
+        """Which route this scorer takes to Jev: ``"typesafe"`` or ``"openrouter"``."""
+        return self._provider
 
     @property
     def horizon(self) -> str:
@@ -194,6 +218,9 @@ class JevScorer:
         if not is_pinned(self._model):
             return None  # an alias could be anything tomorrow; do not cache under it
         contract = {
+            # Two providers serving the same version string is a claim, not a fact, so
+            # answers from one are never reused for the other.
+            "provider": self._provider,
             "model": self._model,
             "levels": SENTIMENT_LEVELS,
             "categories": CATEGORIES,
@@ -248,13 +275,22 @@ class JevScorer:
         key that exists but is rejected surfaces on the first request instead, as a
         fatal error that stops the run with the provider's own message.
         """
+        if self._provider == "openrouter":
+            from . import openrouter
+
+            openrouter.preflight(self._api_key)
+            return
         if importlib.util.find_spec("typesafe_sdk") is None:
             raise ScorerUnavailable(
-                "the Jev scorer needs the TypeSafe SDK: pip install 'newsscore[jev]'"
+                "the Jev scorer needs the TypeSafe SDK: pip install 'newsscore[jev]'. "
+                "Or reach the same model without it: provider='openrouter' with "
+                "OPENROUTER_API_KEY."
             )
         if not (self._api_key or os.environ.get("TYPESAFE_API_KEY")):
             raise ScorerUnavailable(
-                "the Jev scorer needs an API key: pass api_key= or set TYPESAFE_API_KEY"
+                "the Jev scorer needs an API key: pass api_key= or set TYPESAFE_API_KEY. "
+                "Or reach the same model through OpenRouter: provider='openrouter' with "
+                "OPENROUTER_API_KEY."
             )
 
     # ---- setup -------------------------------------------------------------------
@@ -291,27 +327,58 @@ class JevScorer:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            sdk = self._sdk()
-            self._client = sdk.AsyncTypeSafeClient(
-                api_key=self._api_key, model=self._model, timeout=self._timeout
-            )
+            if self._provider == "openrouter":
+                from .openrouter import OpenRouterDecisions
+
+                self._client = OpenRouterDecisions(
+                    api_key=self._api_key, model=self._model, timeout=self._timeout
+                )
+            else:
+                sdk = self._sdk()
+                self._client = sdk.AsyncTypeSafeClient(
+                    api_key=self._api_key, model=self._model, timeout=self._timeout
+                )
         return self._client
+
+    def _question_set(self) -> dict[str, dict[str, Any]]:
+        """Every question with its type and criteria, in a provider-neutral form.
+
+        This is the single definition of what Jev is asked. Each provider renders it
+        into its own packaging, so the two routes cannot drift apart into asking
+        subtly different things.
+        """
+        spec = self._question_spec()
+        questions: dict[str, dict[str, Any]] = {
+            "sentiment": {"type": "score", "instructions": spec["sentiment"], "criteria": SENTIMENT_LEVELS},
+            "relevant": {"type": "noul", "instructions": spec["relevant"]},
+            "category": {"type": "choice", "instructions": spec["category"], "criteria": CATEGORIES},
+        }
+        if self._impact:
+            questions["impact"] = {
+                "type": "choice",
+                "instructions": spec["impact"],
+                "criteria": self._impact_rubric,
+            }
+        questions["novel"] = {"type": "noul", "instructions": spec["novel"]}
+        return questions
 
     def _get_questions(self) -> dict[str, Any]:
         if self._questions is None:
-            sdk = self._sdk()
-            spec = self._question_spec()
-            self._questions = {
-                "sentiment": sdk.Score(instructions=spec["sentiment"], criteria=SENTIMENT_LEVELS),
-                "relevant": sdk.Noul(instructions=spec["relevant"]),
-                "category": sdk.Choice(instructions=spec["category"], criteria=CATEGORIES),
-                **(
-                    {"impact": sdk.Choice(instructions=spec["impact"], criteria=self._impact_rubric)}
-                    if self._impact
-                    else {}
-                ),
-                "novel": sdk.Noul(instructions=spec["novel"]),
-            }
+            questions = self._question_set()
+            if self._provider == "openrouter":
+                from .openrouter import to_questions
+
+                self._questions = to_questions(questions)
+            else:
+                sdk = self._sdk()
+                build = {"score": sdk.Score, "noul": sdk.Noul, "choice": sdk.Choice}
+                self._questions = {
+                    name: build[q["type"]](
+                        instructions=q["instructions"],
+                        **({"criteria": q["criteria"]} if "criteria" in q else {}),
+                    )
+                    for name, q in questions.items()
+                }
         return self._questions
 
     # ---- scoring -----------------------------------------------------------------
@@ -398,14 +465,42 @@ class JevScorer:
 
 
 def classify_error(exc: BaseException) -> ScoreItemError:
-    """Turn one Jev SDK exception into a retry verdict for the engine."""
+    """Turn one failed Jev request into a retry verdict for the engine.
+
+    TypeSafe's SDK signals the kind of failure through the exception class, matched
+    by name so this module never imports the optional SDK just to classify. The
+    OpenRouter transport has one exception class and an HTTP status instead, so it
+    carries its own verdict; an exception that states one is believed.
+    """
     names = {cls.__name__ for cls in type(exc).__mro__}
     return ScoreItemError(
         safe_str(exc),
         error_type=error_slug(type(exc).__name__),
-        retryable=bool(names & RETRYABLE_ERRORS) or isinstance(exc, (TimeoutError, ConnectionError)),
-        fatal=bool(names & FATAL_ERRORS) or isinstance(exc, ImportError),
+        retryable=bool(getattr(exc, "retryable", False))
+        or bool(names & RETRYABLE_ERRORS)
+        or isinstance(exc, (TimeoutError, ConnectionError)),
+        fatal=bool(getattr(exc, "fatal", False))
+        or bool(names & FATAL_ERRORS)
+        or isinstance(exc, ImportError),
     )
+
+
+def _resolve_provider(provider: str | None, api_key: str | None) -> str:
+    """Which route to take when the caller did not say.
+
+    Prefers TypeSafe, because that is the route this scorer was written and measured
+    against; falls back to OpenRouter when only its key is present. An explicit
+    provider is always honoured, so a key for both does not make the choice silent.
+    """
+    if provider is not None:
+        if provider not in DEFAULT_MODELS:
+            raise ValueError(f"provider must be one of {PROVIDERS}, got {provider!r}")
+        return provider
+    if os.environ.get("TYPESAFE_API_KEY"):
+        return "typesafe"
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter"
+    return "typesafe"  # nothing configured: preflight reports it, naming both routes
 
 
 def _usage(usage: Any) -> dict[str, int]:

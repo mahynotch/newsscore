@@ -221,7 +221,7 @@ def test_cli_no_impact_reports_clearly_for_a_scorer_without_it():
     _save_source([make_article("AAPL beats estimates", hours_ago=1)])
     result = runner.invoke(app, ["score", "AAPL", "-d", "30", "--scorer", "keyword", "--impact"])
     assert result.exit_code == 1
-    assert "--impact does not apply" in result.stderr
+    assert "--impact/--provider do not apply" in result.stderr
 
 
 def test_impact_weighting_without_the_question_says_so():
