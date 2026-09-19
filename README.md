@@ -704,8 +704,6 @@ Test artefacts (per-test config files and score caches) are written under
 `E:\test_data\jev_sentiment` when that drive exists; set `NEWSSCORE_TEST_DATA` to move them,
 or they fall back to pytest's temporary directory.
 
-The design notes are in [PLAN.md](PLAN.md).
-
 ## Status: what has and has not been tested live
 
 This is a 0.1 release built and verified on one machine with the API plans its
