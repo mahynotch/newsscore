@@ -488,9 +488,12 @@ keeps working untouched.
 
 ### Is impact worth asking for?
 
-Short answer: **the label is real, but nothing shows it makes your number better.** It
-is off by default for that reason. The measurements below are from this repository's
-benchmark against the live Jev API on real news.
+Short answer: **the label is real and predicts volatility, but not direction, and it
+has not been shown to improve a portfolio.** It is off by default for that reason.
+
+Cost, redundancy and stability below are measured in this repository against the live
+Jev API. The validation against realised prices is from an independent 2025 study run
+with this library at v0.2.0, cited where it is used.
 
 **It is not a restatement of sentiment.** On 308 live AAPL articles, the best possible
 two-threshold rule on `|sentiment|` reproduces the impact label 71.8% of the time
@@ -519,29 +522,68 @@ only 30% of articles get a weight other than `1.0`.
 | 20 articles | 0.028 | 0.086 | 6.8% |
 | 40 articles | 0.021 | 0.068 | 8.5% |
 
-**But it is not validated against what actually happened.** On 597 articles across 20
-symbols, using split- and dividend-adjusted daily closes, and measuring each article's
-move as a residual against SPY scaled by the symbol's own residual volatility:
+**It does identify bigger moves -- and only that.** An independent study over all of
+2025 scored 46,507 news-stock tasks across 64 symbols with this library at v0.2.0,
+measuring each event from its first eligible trading decision rather than counting
+moves that happened before publication. Against daily bars with dividends and splits
+adjusted, standardising each move by the symbol's own pre-event residual volatility:
 
-| | low | medium | high | high - low | p |
-|---|---|---|---|---|---|
-| news day + next | 0.680 | 0.645 | 0.740 | +0.060 | 0.219 |
-| 5 days forward | 0.490 | 0.617 | 0.677 | +0.187 | 0.085 |
+| horizon | high - low | 95% interval |
+|---|---|---|
+| one day, standardised absolute residual | **+0.157** | [+0.100, +0.218] |
+| one day, raw mean absolute return | **+0.477 pp** | [+0.301, +0.723] |
+| five days, standardised | — | **spans zero** |
 
-Residualising matters here: on raw returns every one of these differences washes out,
-because three weeks of megacap moves are mostly market beta.
+3,121 `high` events, so the one-day result is well powered and clearly positive. The
+standardisation matters: it rules out the label simply picking out volatile stocks.
 
-The five-day ordering is monotone and in the right direction, which is what a weak but
-real signal looks like; it is not significant at conventional levels, and the one-day
-test is flat. Switching impact weighting on did not improve how well the daily
-aggregate tracked the forward residual return (Spearman -0.036 to -0.032 -- both
-indistinguishable from zero, in a window where plain sentiment had no forward power
-either). With only 18 `high`-impact articles in the sample this study is underpowered:
-settling it at conventional significance would take on the order of 15,000 scored
-articles, given a ~3-5% base rate for `high`.
+**It does not tell you which way.** In the same study, adding impact weighting changed
+the daily cross-sectional rank correlation with forward returns by about +0.0021 at one
+day and +0.00037 at five days, and the direction hit-rate change was indistinguishable
+from zero. Identifying *"this could move"* is not identifying *"which way"*, and is not
+a reason to raise the weight on that article's sentiment.
 
-So: a stable, non-redundant label, of unproven value, that costs 24% more and changes
-your number by about 0.03. Turn it on if you plan to validate it on your own universe.
+**And in a portfolio it did not pay.** Three arms on the same universe, same daily
+rebalancing, same gross exposure -- equal weight (A), a mild sentiment tilt of
+`1 + 0.5*s` (B), and the same tilt with `low=1 / medium=1.5 / high=3` applied during
+aggregation (C):
+
+| one-way cost | A equal | B sentiment | C + impact | C - B |
+|---|---|---|---|---|
+| 0 bps | 30.22% | 30.71% | 30.82% | +0.108 pp |
+| 5 bps | 29.99% | 29.04% | 29.05% | +0.013 pp |
+| 10 bps | 29.76% | 27.38% | 27.30% | -0.079 pp |
+
+A 10-day moving-block bootstrap over paired daily differences puts the C-B 95% interval
+across zero in both the full year and a Sep-Dec holdout. So impact weighting is not
+shown to help.
+
+**Read the B column too, because it is the more important one.** The sentiment tilt
+beat equal weight by 0.49 pp gross over a year, and bought that with **7.4x the
+turnover** (25.79 against 3.50 units of cumulative absolute weight change). That works
+out to about **2.2 bps of gross edge per unit of extra trading, so the tilt breaks even
+at a one-way cost of 2.2 bps and loses money above it.** At 5 bps, equal weight wins by
+0.96 pp. This is roughly what an efficient-market prior predicts for headline sentiment
+on large caps at a daily horizon, and it is why this README calls the aggregate a
+research input rather than a trade trigger.
+
+That result constrains one expression of the score -- a mild linear cross-sectional
+tilt, rebalanced daily, on a 12-hour half-life. It says nothing about event-driven use,
+slower decay, sentiment changes rather than levels, or a concentrated book. It also
+carries the study's own caveats: a fixed present-day 64-symbol universe has survivorship
+bias, and a model released in 2026 reading 2025 news may have seen how those events
+resolved. That second one cuts an interesting way -- memorisation would make sentiment
+look *too good*, and it does not.
+
+So: a stable, non-redundant label that genuinely predicts volatility, does not predict
+direction, has not been shown to improve a portfolio, and costs 24% more per article.
+Turn it on if you want the volatility signal or plan to validate it on your own
+universe -- not because it will sharpen the sentiment number.
+
+*(An earlier, much smaller study in this repository -- 597 articles, 18 `high` events --
+reported a suggestive five-day effect and a flat one-day effect. The annual study finds
+the opposite pattern with 173x the events, and supersedes it. The small result was
+noise, which is what a p of 0.085 on 18 events usually is.)*
 
 Before you put a 3× weight on `high`, label a few hundred headlines yourself and check
 the labels agree with you. See the caveat at the end of this file.
@@ -725,6 +767,12 @@ against the real endpoint.
 | `tiingo` | yes | **no** | news is 403 on every plan short of a news add-on, so the parser has never seen real data |
 | `keyword` scorer | yes | n/a | offline |
 
+The largest run so far is external: an independent 2025 study scored **46,507
+news-stock tasks with zero failures** through the OpenRouter route at v0.2.0, and
+reconciled its per-task token costs against the provider's invoice to the cent. That
+exercises batching, caching, the failure paths and cost accounting far harder than
+anything in this repository's own tests.
+
 Everything except `tiingo` has now been run against the real endpoint. Untested does
 not mean broken, but field names and pagination details are exactly where providers
 drift from their docs -- so if you hold a Tiingo plan with news enabled, running
@@ -755,15 +803,25 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the short version of the workflow.
 
 ## Caveats
 
-`expected_impact` is new and unvalidated. On a handful of hand-written headlines it
-behaves sensibly — effusive but immaterial CEO language comes back `low`, a revenue
-restatement comes back `high` — but on that sample impact and the magnitude of the
-sentiment score did not visibly come apart, so nothing here demonstrates that it
-carries information beyond "how strong is this news". Build a labelled set before you
-let `high` carry a 3× weight in anything that trades.
+**The aggregate has not been shown to make money.** In the 2025 study described under
+[Is impact worth asking for?](#is-impact-worth-asking-for), a mild daily sentiment tilt
+beat equal weight by 0.49 pp gross over the year while trading 7.4× as much, which
+breaks even at a one-way cost of 2.2 bps and loses at anything above. Headline
+sentiment on large caps is largely priced in within minutes. Treat the aggregate as a
+research input, not a trade trigger, and measure it on your own universe before
+believing otherwise.
 
-Jev launched in September 2026 and its accuracy on financial text has not been
-independently benchmarked. Build a small hand-labelled set and compare `jev`
-against your alternatives before trusting any signal. Headline sentiment on large
-caps is largely priced in within minutes; treat the aggregate as a research input,
-not a trade trigger.
+**`expected_impact` predicts volatility, not direction.** That same study found `high`
+articles precede meaningfully larger one-day idiosyncratic moves (+0.157 standardised,
+95% interval [+0.100, +0.218], over 3,121 events), while the effect on directional
+accuracy and on portfolio returns was indistinguishable from zero. So the label carries
+real information -- just not the kind that justifies a 3× weight on that article's
+sentiment. It is off by default for that reason.
+
+**Jev launched in September 2026** and its accuracy on financial text has not been
+independently benchmarked. Build a small hand-labelled set and compare `jev` against
+your alternatives before trusting any signal.
+
+**Nothing here is a forward test.** Every study on this page scores historical news
+with a model trained after those events resolved, on a universe chosen with hindsight.
+A holdout period limits parameter-tuning leakage; it cannot remove either of those.
