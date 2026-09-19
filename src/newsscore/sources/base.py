@@ -19,15 +19,37 @@ if TYPE_CHECKING:  # only annotations need httpx here; fetching imports it for r
 from ..models import UTC, Article, make_id, parse_dt, to_utc  # noqa: F401  (re-exported)
 
 
-class SourceError(RuntimeError):
-    """A provider call failed. Carries the source name and, when known, the HTTP status."""
+REDACTED = "<redacted>"
 
-    def __init__(self, source: str, message: str, status: int | None = None) -> None:
+
+def redact(text: str, secret: str | None) -> str:
+    """Replace ``secret`` wherever it appears in ``text``.
+
+    Most providers take their key as a *query parameter*, so any message quoting a
+    URL -- which is most transport errors -- carries the key with it. Alpha Vantage
+    goes further and echoes the key back in its quota message. Error text ends up in
+    logs, CI output and tracebacks, so it must not carry credentials.
+    """
+    if not secret or len(secret) < 8:  # too short to remove without mangling the text
+        return text
+    return text.replace(secret, REDACTED)
+
+
+class SourceError(RuntimeError):
+    """A provider call failed. Carries the source name and, when known, the HTTP status.
+
+    Pass ``secret`` whenever the message could quote a URL or a provider response, so
+    the key is stripped before it reaches a log. Custom sources should do the same.
+    """
+
+    def __init__(
+        self, source: str, message: str, status: int | None = None, *, secret: str | None = None
+    ) -> None:
         self.source = source
         self.status = status
         prefix = f"{source}: " if source else ""
         suffix = f" (HTTP {status})" if status else ""
-        super().__init__(f"{prefix}{message}{suffix}")
+        super().__init__(f"{prefix}{redact(message, secret)}{suffix}")
 
 
 class NewsSource(ABC):
@@ -83,13 +105,13 @@ class NewsSource(ABC):
         try:
             response = await client.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
-            raise SourceError(self.name, f"request failed: {exc}") from exc
+            raise SourceError(self.name, f"request failed: {exc}", secret=self.api_key) from exc
         if response.status_code >= 400:
-            raise SourceError(self.name, _short(response.text), response.status_code)
+            raise SourceError(self.name, _short(response.text), response.status_code, secret=self.api_key)
         try:
             return response.json()
         except ValueError as exc:
-            raise SourceError(self.name, f"invalid JSON: {_short(response.text)}") from exc
+            raise SourceError(self.name, f"invalid JSON: {_short(response.text)}", secret=self.api_key) from exc
 
     def _article(
         self,

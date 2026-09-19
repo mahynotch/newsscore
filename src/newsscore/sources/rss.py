@@ -53,7 +53,7 @@ class RssSource(NewsSource):
         try:
             response = await client.get(url, headers={"Accept": "application/rss+xml, application/xml, text/xml, */*"})
         except httpx.HTTPError as exc:
-            raise SourceError(self.name, f"request failed: {exc}") from exc
+            raise SourceError(self.name, f"request failed: {exc}", secret=self.api_key) from exc
         if response.status_code >= 400:
             raise SourceError(self.name, "feed request failed", response.status_code)
         try:

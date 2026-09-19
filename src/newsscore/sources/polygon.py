@@ -69,7 +69,15 @@ class PolygonSource(NewsSource):
 
 
 class MassiveSource(PolygonSource):
-    """Same provider under its new name."""
+    """Same provider under its new name, and the same account.
+
+    Registered under both names, so a key stored as either ``MASSIVE_API_KEY`` or
+    ``POLYGON_API_KEY`` works for either spelling; the rename should not cost anyone
+    a second entry in their ``.env``.
+    """
 
     type_name = "massive"
     env_key = "MASSIVE_API_KEY"
+
+    def __init__(self, api_key: str | None = None, name: str | None = None, **options: object) -> None:
+        super().__init__(api_key or os.environ.get("POLYGON_API_KEY"), name, **options)

@@ -14,9 +14,10 @@ uv run pytest
 
 ## Most wanted: live testers
 
-Several sources have only been tested against fixture payloads. If you have a key
-for Alpha Vantage, Marketaux, Tiingo (news-enabled plan) or a non-Yahoo RSS/Atom
-feed, please run:
+Every source except Tiingo has now been run against its real endpoint, on the free
+tier of each provider. The gaps that remain are **Tiingo news**, which needs a plan
+with the news add-on, and any provider on a *paid* tier, where pagination and rate
+limits behave differently from anything tested here. If that is you, please run:
 
 ```bash
 uv run newsscore source add <type>
@@ -24,7 +25,8 @@ uv run newsscore -v fetch AAPL -s <type> -d 7
 uv run newsscore score AAPL -s <type> --scorer keyword -a 5
 ```
 
-and open an issue with the provider, your plan tier, and the output (redact the key).
+and open an issue with the provider, your plan tier, and the output. Errors already
+have your key stripped out, but check anything you paste by hand.
 "Works as expected" is as valuable as a bug report.
 
 ## Pull requests
@@ -32,6 +34,8 @@ and open an issue with the provider, your plan tier, and the output (redact the 
 1. One topic per PR. Small is good.
 2. Add or update a test. Sources get a fixture test in `tests/test_sources.py`;
    scorers and engine changes go in `tests/test_core.py` or `tests/test_scorer.py`.
+   A source that raises from a provider response must keep the key out of the
+   message -- pass `secret=` to `SourceError`.
 3. `uv run pytest` must pass.
 4. Update the README (sources table, scorers table, or the live-test status table)
    when behaviour or coverage changes.

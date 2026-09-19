@@ -162,3 +162,55 @@ def test_rss_atom_and_template_url():
 def test_rss_requires_url():
     with pytest.raises(SourceError, match="url"):
         make_source("rss")
+
+
+def test_api_keys_never_reach_an_error_message():
+    """Most providers take the key as a query parameter, so any message quoting a URL
+    would otherwise carry it straight into a log."""
+    import httpx
+
+    from newsscore.sources.base import REDACTED, SourceError, redact
+
+    key = "super-secret-key-1234"
+
+    # a transport error, whose text contains the request URL
+    err = SourceError("finnhub", f"request failed: GET https://x/news?token={key}", secret=key)
+    assert key not in str(err) and REDACTED in str(err)
+
+    # a provider echoing the key back, as Alpha Vantage does in its quota message
+    err = SourceError("alpha_vantage", f"We have detected your API key as {key} and ...", secret=key)
+    assert key not in str(err)
+
+    assert redact("nothing to hide", None) == "nothing to hide"
+    assert redact(f"a {key} b", key) == f"a {REDACTED} b"
+    assert redact("short", "abc") == "short", "a tiny secret would mangle unrelated text"
+
+
+def test_alpha_vantage_quota_message_is_reported_without_the_key(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from newsscore.sources import SourceError, make_source
+
+    key = "AV-KEY-0123456789"
+    quota = {"Information": f"We have detected your API key as {key} and our standard API rate limit is 25 per day"}
+    source = make_source("alpha_vantage", api_key=key, name="av")
+
+    async def go():
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=quota))
+        async with httpx.AsyncClient(transport=transport) as client:
+            await source.fetch("AAPL", NOW - timedelta(days=1), NOW, client)
+
+    with pytest.raises(SourceError) as excinfo:
+        asyncio.run(go())
+    assert key not in str(excinfo.value)
+    assert "rate limit" in str(excinfo.value), "the useful part of the message survives"
+
+
+def test_massive_accepts_a_polygon_key(monkeypatch):
+    from newsscore.sources import make_source
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.setenv("POLYGON_API_KEY", "pk-123")
+    assert make_source("massive").api_key == "pk-123", "one account, either spelling"

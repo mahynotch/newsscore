@@ -37,7 +37,7 @@ class AlphaVantageSource(NewsSource):
         # Alpha Vantage reports quota and key problems as 200 OK with a message.
         for key in ("Information", "Note", "Error Message"):
             if key in data:
-                raise SourceError(self.name, str(data[key]))
+                raise SourceError(self.name, str(data[key]), secret=self.api_key)
         out: list[Article] = []
         for item in data.get("feed") or []:
             published = parse_dt(item["time_published"])

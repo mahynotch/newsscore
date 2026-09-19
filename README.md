@@ -713,21 +713,28 @@ against the real endpoint.
 
 | Component | Unit tests | Live-tested | Notes |
 |---|---|---|---|
-| `finnhub` | yes | **yes** | free tier, 237 AAPL articles / 7 days |
-| `polygon` / `massive` | yes | **yes** | free tier via `api.massive.com`, pagination exercised |
-| `newsapi` | yes | **yes** | developer plan (24 h delay) |
+| `finnhub` | yes | **yes** | free tier, 142 AAPL articles / 3 days |
+| `polygon` / `massive` | yes | **yes** | free tier via `api.massive.com`, pagination exercised; both spellings accept either env var |
+| `newsapi` | yes | **yes** | developer plan (24 h delay), 99 articles |
+| `alpha_vantage` | yes | **yes** | free tier; 25 requests/day *across all functions*, and the quota message is reported as a `SourceError` |
+| `marketaux` | yes | **yes** | free plan; returns 3 articles per page, so counts are small |
 | `yahoo` RSS | yes | **yes** | keyless |
-| `jev` scorer | yes (fake client) | **yes** | 310 articles scored with a real `TYPESAFE_API_KEY` |
-| `alpha_vantage` | yes | **no** | no key available; quota-message handling untested live |
-| `marketaux` | yes | **no** | no key available; page-size behaviour on the free plan unverified |
-| `tiingo` | yes | **no** | live call returned 403 on the free plan, so the parser has never seen real data |
-| generic `rss` (Atom) | yes | **no** | Atom branch only covered by a fixture; RSS 2.0 covered via Yahoo |
+| generic `rss` (Atom) | yes | **yes** | Google News Atom feed, 33 articles |
+| `jev` via TypeSafe | yes (fake client) | **yes** | 310 articles with a real `TYPESAFE_API_KEY` |
+| `jev` via OpenRouter | yes (mock transport) | **yes** | the same 310 articles; see [Do the two routes agree?](#do-the-two-routes-agree) |
+| `tiingo` | yes | **no** | news is 403 on every plan short of a news add-on, so the parser has never seen real data |
 | `keyword` scorer | yes | n/a | offline |
 
-Untested does not mean broken, but field names and pagination details are exactly
-where providers drift from their docs. If you hold a key for one of the untested
-sources, running `newsscore fetch AAPL -s <source>` and reporting the outcome is the
-single most useful contribution right now.
+Everything except `tiingo` has now been run against the real endpoint. Untested does
+not mean broken, but field names and pagination details are exactly where providers
+drift from their docs -- so if you hold a Tiingo plan with news enabled, running
+`newsscore fetch AAPL -s tiingo` and reporting the outcome is the single most useful
+contribution right now.
+
+Provider errors are reported with your API key removed, because most of these pass the
+key as a query parameter and any message quoting a URL would otherwise carry it into
+your logs. A custom source should pass `secret=` to `SourceError` to get the same
+treatment.
 
 ## Contributing
 

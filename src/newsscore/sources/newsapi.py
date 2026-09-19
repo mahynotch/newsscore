@@ -41,7 +41,7 @@ class NewsApiSource(NewsSource):
                 client, self.URL, params=params, headers={"X-Api-Key": self.api_key or ""}
             )
             if data.get("status") != "ok":
-                raise SourceError(self.name, data.get("message") or "unknown error")
+                raise SourceError(self.name, data.get("message") or "unknown error", secret=self.api_key)
             items = data.get("articles") or []
             for item in items:
                 published = parse_dt(item["publishedAt"])
